@@ -17,8 +17,6 @@ cd EnergySim
 pip install -e .
 ```
 
-## Usage
-
 
 ## Project Structure
 - `energy_sim/core/` - Core simulation components
@@ -28,9 +26,3 @@ pip install -e .
 - `energy_sim/utils/` - Utility functions
 - `scripts/` - Example scripts
 - `tests/` - Unit tests
-
-## Contributing
-Contributions are welcome! Please submit issues or pull requests via GitHub.
-
-## License
-This project is licensed under the MIT License.

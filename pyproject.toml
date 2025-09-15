@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "EnergySim"
+version = "0.0.1"
+authors = [
+  { name="Philip Hierhager", email="Philip.Hierhager@googlemail.com"},
+]
+description = ""
+readme = "README.md"
+requires-python = ">=3.11, <3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "gymnasium",
+    "numpy",
+    "pytest",
+    "pandas",
+    "helics",
+    "dacite"
+]
+
+
+[project.optional-dependencies]
+cu118 = [
+    "torch==2.7.1+cu118",
+    "torchaudio==2.7.1+cu118", 
+    "torchvision==0.22.1+cu118",
+]
+cu126 = [
+    "torch==2.7.1+cu126",
+    "torchaudio==2.7.1+cu126",
+    "torchvision==0.22.1+cu126",
+]
+cu128 = [
+    "torch==2.7.1+cu128", 
+    "torchaudio==2.7.1+cu128",
+    "torchvision==0.22.1+cu128",
+]
+cpu = [
+    "torch==2.7.1",
+    "torchaudio==2.7.1", 
+    "torchvision==0.22.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bems_simulation*"]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests"
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
