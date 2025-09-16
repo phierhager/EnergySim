@@ -3,10 +3,10 @@
 import pytest
 from unittest.mock import Mock
 import numpy as np
-from bems_simulation.core.data.dataset import EnergyDataset
-from bems_simulation.core.data.sources.base import DataSource, DataRequest
-from bems_simulation.core.data.config import EnergyDatasetParams
-from bems_simulation.core.data.data_bundle import DataBundle
+from energysim.core.data.dataset import EnergyDataset
+from energysim.core.data.sources.base import DataSource, DataRequest
+from energysim.core.data.config import EnergyDatasetParams
+from energysim.core.data.data_bundle import DataBundle
 
 
 class MockDataSource(DataSource):

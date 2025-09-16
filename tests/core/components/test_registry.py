@@ -1,6 +1,6 @@
 """Tests for component registry system."""
 import pytest
-from bems_simulation.core.components.registry import (
+from energysim.core.components.registry import (
     registry,
     register_local_component,
     register_remote_component,
@@ -119,7 +119,7 @@ def test_register_connection():
 
 def test_registry_singleton_behavior():
     # Arrange & Act
-    from bems_simulation.core.components.registry import registry as registry2
+    from energysim.core.components.registry import registry as registry2
     
     # Assert
     assert registry is registry2

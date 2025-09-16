@@ -1,14 +1,14 @@
 """Tests for battery configuration validation."""
 
 import pytest
-from bems_simulation.core.components.local.battery.config import (
+from energysim.core.components.local.battery.config import (
     SimpleBatteryModelConfig,
     SimpleBatteryActionSpace,
     SimpleActuatorConfig,
     BatteryComponentConfig,
 )
-from bems_simulation.core.components.shared.sensors import ComponentSensorConfig
-from bems_simulation.core.components.shared.spaces import DiscreteSpace
+from energysim.core.components.shared.sensors import ComponentSensorConfig
+from energysim.core.components.shared.spaces import DiscreteSpace
 
 
 def test_simple_battery_model_config_valid():

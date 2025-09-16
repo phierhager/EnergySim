@@ -1,15 +1,15 @@
 """Tests for battery model implementation."""
 
 import pytest
-from bems_simulation.core.components.local.battery.model import (
+from energysim.core.components.local.battery.model import (
     DegradingBatteryModel,
     SimpleBatteryModel,
 )
-from bems_simulation.core.components.local.battery.config import (
+from energysim.core.components.local.battery.config import (
     DegradingBatteryModelConfig,
     SimpleBatteryModelConfig,
 )
-from bems_simulation.core.components.shared.component_outputs import ElectricalStorage
+from energysim.core.components.shared.component_outputs import ElectricalStorage
 
 
 def test_simple_battery_model_initialization():

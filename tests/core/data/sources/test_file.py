@@ -3,9 +3,9 @@
 import pytest
 import pandas as pd
 from unittest.mock import patch, Mock
-from bems_simulation.core.data.sources.file import FileDataSource
-from bems_simulation.core.data.sources.config import FileDataSourceConfig
-from bems_simulation.core.data.sources.base import DataRequest
+from energysim.core.data.sources.file import FileDataSource
+from energysim.core.data.sources.config import FileDataSourceConfig
+from energysim.core.data.sources.base import DataRequest
 
 
 @pytest.fixture

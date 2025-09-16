@@ -2,10 +2,10 @@
 import pytest
 from unittest.mock import Mock
 import numpy as np
-from bems_simulation.core.components.local.battery.component import Battery
-from bems_simulation.core.components.local.battery.model import IBatteryModel
-from bems_simulation.core.components.local.battery.actuator import IBatteryActuator
-from bems_simulation.core.components.shared.component_outputs import ComponentOutputs, ElectricalStorage, ElectricalEnergy
+from energysim.core.components.local.battery.component import Battery
+from energysim.core.components.local.battery.model import IBatteryModel
+from energysim.core.components.local.battery.actuator import IBatteryActuator
+from energysim.core.components.shared.component_outputs import ComponentOutputs, ElectricalStorage, ElectricalEnergy
 
 
 class MockBatteryModel(IBatteryModel):

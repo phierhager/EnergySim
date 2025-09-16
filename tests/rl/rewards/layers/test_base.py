@@ -1,8 +1,8 @@
 """Tests for base reward layer implementation."""
 import pytest
 from unittest.mock import Mock
-from bems_simulation.rl.rewards.layers.base import RewardLayer
-from bems_simulation.rl.rewards.contexts import RewardContext
+from energysim.rl.rewards.layers.base import RewardLayer
+from energysim.rl.rewards.contexts import RewardContext
 
 
 class ConcreteRewardLayer(RewardLayer):

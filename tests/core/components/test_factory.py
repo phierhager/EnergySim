@@ -3,11 +3,11 @@
 import pytest
 from unittest.mock import Mock, patch
 from dataclasses import dataclass, field
-from bems_simulation.core.components.factory import build_component, build_components
-from bems_simulation.core.components.shared.component_base import ComponentBase
-from bems_simulation.core.components.shared.component_config import BaseComponentConfig
-from bems_simulation.core.components.local.shared.config import BaseLocalComponentConfig
-from bems_simulation.core.components.remote.shared.config import (
+from energysim.core.components.factory import build_component, build_components
+from energysim.core.components.shared.component_base import ComponentBase
+from energysim.core.components.shared.component_config import BaseComponentConfig
+from energysim.core.components.local.shared.config import BaseLocalComponentConfig
+from energysim.core.components.remote.shared.config import (
     BaseRemoteComponentConfig,
 )
 
@@ -65,8 +65,8 @@ class MockRemoteComponent(ComponentBase):
         return self._action_space or {}
 
 
-@patch("bems_simulation.core.components.factory.registry")
-@patch("bems_simulation.core.components.factory.local_component_factory")
+@patch("energysim.core.components.factory.registry")
+@patch("energysim.core.components.factory.local_component_factory")
 def test_build_local_component(mock_local_factory, mock_registry):
     # Arrange
     config = MockLocalConfig()
@@ -84,8 +84,8 @@ def test_build_local_component(mock_local_factory, mock_registry):
     assert result == mock_component_instance
 
 
-@patch("bems_simulation.core.components.factory.registry")
-@patch("bems_simulation.core.components.factory.remote_component_factory")
+@patch("energysim.core.components.factory.registry")
+@patch("energysim.core.components.factory.remote_component_factory")
 def test_build_remote_component(mock_remote_factory, mock_registry):
     # Arrange
     config = MockRemoteConfig()
@@ -118,7 +118,7 @@ def test_build_component_raises_for_unknown_config():
         build_component(config)
 
 
-@patch("bems_simulation.core.components.factory.build_component")
+@patch("energysim.core.components.factory.build_component")
 def test_build_components(mock_build_component):
     # Arrange
     config1 = MockLocalConfig()

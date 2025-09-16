@@ -47,9 +47,8 @@ cpu = [
     "torchvision==0.22.1",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["bems_simulation*"]
+[tool.setuptools]
+packages = ["energysim"]
 
 [tool.pytest.ini_options]
 testpaths = [
