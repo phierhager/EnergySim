@@ -47,8 +47,10 @@ cpu = [
     "torchvision==0.22.1",
 ]
 
-[tool.setuptools]
-packages = ["energysim"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["energysim*"]
+
 
 [tool.pytest.ini_options]
 testpaths = [
