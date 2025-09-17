@@ -17,7 +17,7 @@ class EfficiencyRewardLayer(RewardLayer):
         self_consumption_bonus: float = 0.02,
         enabled: bool = True,
     ):
-        super().__init__(weight, enabled, "EfficiencyReward")
+        super().__init__(weight, enabled, "efficiency")
         self.renewable_bonus = renewable_bonus
         self.self_consumption_bonus = self_consumption_bonus
 

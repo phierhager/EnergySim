@@ -13,7 +13,7 @@ class GridStabilityRewardLayer(RewardLayer):
         storage_bonus: float = 0.01,
         enabled: bool = True,
     ):
-        super().__init__(weight, enabled, "GridStabilityReward")
+        super().__init__(weight, enabled, "grid_stability")
         self.balance_tolerance = balance_tolerance
         self.balance_bonus = balance_bonus
         self.storage_bonus = storage_bonus

@@ -19,7 +19,7 @@ class ComfortRewardLayer(RewardLayer):
         max_penalty: float = 10.0,
         enabled: bool = True,
     ):
-        super().__init__(weight, enabled, "ComfortReward")
+        super().__init__(weight, enabled, "comfort")
         self.temperature_comfort_band = temperature_comfort_band
         self.humidity_comfort_band = humidity_comfort_band
         self.max_penalty = max_penalty

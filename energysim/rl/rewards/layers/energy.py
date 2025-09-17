@@ -18,7 +18,7 @@ class EnergyRewardLayer(RewardLayer):
         weight: float = 1.0,
         enabled: bool = True,
     ):
-        super().__init__(weight, enabled, "EnergyReward")
+        super().__init__(weight, enabled, "energy")
 
     def calculate_reward(self, context: RewardContext) -> float:
         energy_cost = EnergyMetricsCalculator.get_energy_metrics(
