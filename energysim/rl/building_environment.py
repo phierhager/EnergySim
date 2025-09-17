@@ -161,7 +161,11 @@ class BuildingEnvironment(Env):
 
         done = self._timestep_index >= len(self.dataset)
 
-        return observations, reward, done, False, reward_info
+        info = {
+            "reward": reward_info
+        }
+
+        return observations, reward, done, False, info
 
     @property
     def action_space(self) -> spaces.Space:
