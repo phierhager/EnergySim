@@ -142,8 +142,9 @@ class BuildingEnvironment(Env):
         )
 
         # Calculate reward
+        total_comp_out=sum(component_outputs.values(), start=ComponentOutputs())
         context = RewardContext(
-            component_outputs=sum(component_outputs.values(), start=ComponentOutputs()),
+            component_outputs=total_comp_out,
             thermal_state=thermal_state,
             economic_context=self.economic_context,
         )
@@ -162,7 +163,9 @@ class BuildingEnvironment(Env):
         done = self._timestep_index >= len(self.dataset)
 
         info = {
-            "reward": reward_info
+            "reward": reward_info,
+            "energy_consumption": total_comp_out.electrical_energy.net,
+            "temperature_error": thermal_state.temperature_error
         }
 
         return observations, reward, done, False, info
