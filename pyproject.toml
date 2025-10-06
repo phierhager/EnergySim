@@ -21,7 +21,8 @@ dependencies = [
     "pytest",
     "pandas",
     "helics",
-    "dacite"
+    "dacite",
+    "pyyaml"
 ]
 
 

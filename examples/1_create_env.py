@@ -1,3 +1,6 @@
+# To be able to run this example, please create a dataset.csv file with the script create_random_dataset.py.
+# Also, make sure to run the HELICS broker before running this example with start_broker.py.
+
 import logging
 import yaml
 from dacite import from_dict, Config
