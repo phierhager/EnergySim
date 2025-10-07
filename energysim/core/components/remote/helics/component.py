@@ -35,7 +35,6 @@ class HelicsComponent(RemoteComponent):
         connection: HelicsConnection,
         action_space: Dict[str, Space],
     ):
-        # Not very elegant as no Dependency Injection
         self.helics_connection = connection
         self._initialized = False
         self._action_space = action_space

@@ -11,7 +11,6 @@ from energysim.core.components.shared.component_base import ComponentBase
 
 
 def build_component(config: BaseComponentConfig) -> ComponentBase:
-    print(registry.components)
     component_cls, is_local = registry.components[config.__class__.__name__]
     if is_local:
         component_factory = local_component_factory(component_cls)

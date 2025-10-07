@@ -5,5 +5,5 @@ from energysim.core.components.shared.spaces import Space
 
 class LocalComponent(ComponentBase, ABC):
     @abstractmethod
-    def __init__(self, model: object, actuator: object):
+    def __init__(self, model: object):
         pass

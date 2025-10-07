@@ -1,12 +1,8 @@
-from energysim.core.components.local.battery.actuator import (
-    IBatteryActuator,
-    SimpleBatteryActuator,
-)
 from energysim.core.components.local.battery.model import (
     IBatteryModel,
 )
 from energysim.core.components.local.shared.component import LocalComponent
-from energysim.core.components.shared.spaces import Space
+from energysim.core.components.shared.spaces import ContinuousSpace, Space
 from energysim.core.components.shared.component_base import (
     ComponentBase,
     ComponentOutputs,
@@ -21,9 +17,8 @@ import numpy as np
 
 @register_local_component(BatteryComponentConfig)
 class Battery(LocalComponent):
-    def __init__(self, model: IBatteryModel, actuator: IBatteryActuator):
+    def __init__(self, model: IBatteryModel):
         self._model = model
-        self._actuator = actuator
         self._initialized = False
 
     def initialize(self) -> ComponentOutputs:
@@ -38,12 +33,12 @@ class Battery(LocalComponent):
         if not self._initialized:
             raise RuntimeError("Battery must be initialized before advancing.")
 
-        action = input.get("action")
-        if action is None:
-            raise ValueError("Input must contain 'action' key.")
+        if "normalized_power" not in input:
+            raise ValueError("Input must contain 'normalized_power' key.")
 
-        requested_power = self._actuator.interpret_action(action, self._model.max_power)
-        energy_transfer = self._model.apply_power(requested_power, dt_seconds)
+        normalized_power = float(input["normalized_power"][0]) # in [-1, 1]
+        power = normalized_power * self._model.max_power # in Watts
+        energy_transfer = self._model.apply_power(power, dt_seconds)
 
         return ComponentOutputs(
             electrical_storage=self._model.storage,
@@ -55,4 +50,8 @@ class Battery(LocalComponent):
 
     @property
     def action_space(self) -> dict[str, Space]:
-        return self._actuator.action_space
+        return {
+            "normalized_power": ContinuousSpace(
+                lower_bound=-1.0, upper_bound=1.0
+            )
+        }

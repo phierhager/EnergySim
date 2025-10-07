@@ -3,7 +3,6 @@ from typing import ClassVar, Literal, Union
 
 from energysim.core.components.local.battery.config import (
     DegradingBatteryModelConfig,
-    SimpleBatteryActionSpace,
     SimpleBatteryModelConfig,
 )
 from energysim.core.components.shared.component_base import ComponentBase
@@ -31,7 +30,7 @@ class IBatteryModel(ABC):
         pass
 
     @abstractmethod
-    def apply_power(self, requested_power: float, dt_seconds: float) -> float:
+    def apply_power(self, normalized_power: float, dt_seconds: float) -> float:
         """Applies requested power (positive=charge, negative=discharge)."""
         pass
 
@@ -50,13 +49,13 @@ class SimpleBatteryModel(IBatteryModel):
     def storage(self) -> ElectricalStorage:
         return self._storage
 
-    def apply_power(self, requested_power: float, dt_seconds: float) -> float:
+    def apply_power(self, normalized_power: float, dt_seconds: float) -> float:
         """Applies requested power (positive=charge, negative=discharge)."""
         if dt_seconds <= 0:
             raise ValueError("dt_seconds must be positive.")
 
-        requested_energy = abs(requested_power) * dt_seconds
-        is_charge = requested_power > 0
+        requested_energy = abs(normalized_power) * dt_seconds
+        is_charge = normalized_power > 0
         return self._perform_energy_transfer(requested_energy, is_charge)
 
     def _perform_energy_transfer(
@@ -105,12 +104,12 @@ class DegradingBatteryModel(IBatteryModel):
     def storage(self) -> ElectricalStorage:
         return self._storage
 
-    def apply_power(self, requested_power: float, dt_seconds: float) -> float:
+    def apply_power(self, normalized_power: float, dt_seconds: float) -> float:
         if dt_seconds <= 0:
             raise ValueError("dt_seconds must be positive.")
 
-        requested_energy = abs(requested_power) * dt_seconds
-        is_charge = requested_power > 0
+        requested_energy = abs(normalized_power) * dt_seconds
+        is_charge = normalized_power > 0
         transferred = self._perform_energy_transfer(requested_energy, is_charge)
         self._throughput += abs(transferred)
         self._apply_degradation()

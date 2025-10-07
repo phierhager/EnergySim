@@ -174,10 +174,6 @@ class BuildingEnvironment(Env):
     def action_space(self) -> spaces.Space:
         spaces_dict = {}
         for component_name, component in self.components.items():
-            print(
-                f"Component '{component_name}' action space: {component.action_space}"
-            )
-            print(type(component.action_space["action"]))
             spaces_dict[component_name] = get_gymnasium_space(component.action_space)
         return spaces.Dict(spaces_dict)
 

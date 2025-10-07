@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 class Registry:
     components: dict = field(default_factory=dict)
     models: dict = field(default_factory=dict)
-    actuators: dict = field(default_factory=dict)
     connections: dict = field(default_factory=dict)
 
 
@@ -33,14 +32,6 @@ def register_remote_component(config_cls):
 def register_model(config_cls):
     def decorator(cls):
         registry.models[config_cls.__name__] = cls
-        return cls
-
-    return decorator
-
-
-def register_actuator(config_cls):
-    def decorator(cls):
-        registry.actuators[config_cls.__name__] = cls
         return cls
 
     return decorator

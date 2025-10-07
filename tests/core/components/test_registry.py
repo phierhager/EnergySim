@@ -5,7 +5,6 @@ from energysim.core.components.registry import (
     register_local_component,
     register_remote_component,
     register_model,
-    register_actuator,
     register_connection,
 )
 
@@ -15,10 +14,6 @@ class MockComponentConfig:
 
 
 class MockModel:
-    pass
-
-
-class MockActuator:
     pass
 
 
@@ -79,24 +74,6 @@ def test_register_model():
     assert len(registry.models) == initial_count + 1
     assert ModelConfig.__name__ in registry.models
     assert registry.models[ModelConfig.__name__] == TestModel
-
-
-def test_register_actuator():
-    # Arrange
-    class ActuatorConfig:
-        pass
-    
-    initial_count = len(registry.actuators)
-    
-    # Act
-    @register_actuator(ActuatorConfig)
-    class TestActuator:
-        pass
-    
-    # Assert
-    assert len(registry.actuators) == initial_count + 1
-    assert ActuatorConfig.__name__ in registry.actuators
-    assert registry.actuators[ActuatorConfig.__name__] == TestActuator
 
 
 def test_register_connection():

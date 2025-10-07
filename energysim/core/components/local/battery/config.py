@@ -70,64 +70,9 @@ class DegradingBatteryModelConfig:
 
 BatteryModelConfig = Union[SimpleBatteryModelConfig, DegradingBatteryModelConfig]
 
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SimpleBatteryActionSpace:
-    action: Space
-
-    def validate_action(self, action) -> None:
-        self.action.validate_action(action)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SimpleActuatorConfig:
-    space: SimpleBatteryActionSpace
-    type: Literal["simple"] = "simple"
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PIBatteryActionSpace:
-    action: ContinuousSpace
-
-    def validate_action(self, action) -> None:
-        self.action.validate_action(action)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PIActuatorConfig:
-    space: PIBatteryActionSpace
-    kp: float = 0.5
-    ki: float = 0.1
-    type: Literal["pi"] = "pi"
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class OnOffPowerBatteryActionSpace:
-    max_power: ContinuousSpace
-    on: DiscreteSpace = field(
-        default_factory=lambda: DiscreteSpace(n_actions=2)
-    )  # 0: off, 1: on
-
-    def validate_action(self, max_power, on) -> None:
-        self.max_power.validate_action(max_power)
-        self.on.validate_action(on)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class OnOffPowerActuatorConfig:
-    space: OnOffPowerBatteryActionSpace
-    type: Literal["on_off_power"] = "on_off_power"
-
-
-BatteryActuatorConfig = Union[
-    SimpleActuatorConfig, PIActuatorConfig, OnOffPowerActuatorConfig
-]
-
-
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BatteryComponentConfig(BaseLocalComponentConfig):
     model: BatteryModelConfig
-    actuator: BatteryActuatorConfig
     # the sensor is inherited from BaseComponentConfig
 
     type: Literal["battery"] = "battery"
