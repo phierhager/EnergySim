@@ -106,8 +106,9 @@ class BuildingEnvironment(Env):
         for name, component in self.components.items():
             if name not in action:
                 raise ValueError(f"Missing action for component '{name}'")
+            
             component_outputs[name] = component.advance(
-                input=action[name], dt_seconds=dt_seconds
+                input={k: float(v) for k,v in action[name].items()}, dt_seconds=dt_seconds
             )
 
         data_observations = {}

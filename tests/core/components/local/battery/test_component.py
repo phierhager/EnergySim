@@ -69,7 +69,7 @@ def test_battery_advance_without_initialization_raises_error():
     
     # Act & Assert
     with pytest.raises(RuntimeError, match="Battery must be initialized before advancing"):
-        battery.advance({"normalized_power": np.array([1.0])}, 3600.0)
+        battery.advance({"normalized_power": 1.0}, 3600.0)
 
 
 def test_battery_advance_missing_action_raises_error():
@@ -89,8 +89,7 @@ def test_battery_advance_positive_power():
     battery = Battery(model)
     battery.initialize()
     
-    action = np.array([0.5])  # 50% of max power
-    input_dict = {"normalized_power": action}
+    input_dict = {"normalized_power": 0.5} # 50% of max power
     dt_seconds = 3600.0
     
     # Act
@@ -112,8 +111,7 @@ def test_battery_advance_negative_power():
     battery = Battery(model)
     battery.initialize()
     
-    action = np.array([-0.3])  # -30% of max power
-    input_dict = {"normalized_power": action}
+    input_dict = {"normalized_power": -0.3} # -30% of max power
     dt_seconds = 3600.0
     
     # Mock the model to return negative energy (discharge)

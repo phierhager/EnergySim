@@ -53,17 +53,16 @@ class HelicsComponent(RemoteComponent):
 
         return ComponentOutputs()
 
-    def advance(self, input: dict, dt_seconds: float) -> ComponentOutputs:
+    def advance(self, input: dict[str, float], dt_seconds: float) -> ComponentOutputs:
         """Send inputs to HELICS and receive outputs."""
         if not self._initialized:
             raise RuntimeError("Component must be initialized before advance.")
 
         logger.debug("Advance called with input=%s, dt=%s", input, dt_seconds)
-        serialized_input = numpy_to_python(input)
 
         # Send control inputs via HELICS
-        logger.debug("Publishing control data to HELICS: %s", serialized_input)
-        self.helics_connection.publish(serialized_input)
+        logger.debug("Publishing control data to HELICS: %s", input)
+        self.helics_connection.publish(input)
         # TODO! Blocker!
         # Receive state updates
         remote_data = self.helics_connection.subscribe()

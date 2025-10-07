@@ -28,7 +28,7 @@ class Battery(LocalComponent):
         return ComponentOutputs(electrical_storage=self._model.storage)
 
     def advance(
-        self, input: dict[str, np.ndarray], dt_seconds: float
+        self, input: dict[str, float], dt_seconds: float
     ) -> ComponentOutputs:
         if not self._initialized:
             raise RuntimeError("Battery must be initialized before advancing.")
@@ -36,7 +36,7 @@ class Battery(LocalComponent):
         if "normalized_power" not in input:
             raise ValueError("Input must contain 'normalized_power' key.")
 
-        normalized_power = float(input["normalized_power"][0]) # in [-1, 1]
+        normalized_power = input["normalized_power"] # in [-1, 1]
         power = normalized_power * self._model.max_power # in Watts
         energy_transfer = self._model.apply_power(power, dt_seconds)
 

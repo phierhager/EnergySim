@@ -12,7 +12,7 @@ class ComponentBase(ABC):
         pass
 
     @abstractmethod
-    def advance(self, input: dict, dt_seconds) -> ComponentOutputs:
+    def advance(self, input: dict[str, float], dt_seconds) -> ComponentOutputs:
         """Update the component state for the given timestep."""
         pass
 
