@@ -28,13 +28,6 @@ components:
       observe_cooling_flow: false
       soc_noise_std: 0.01
       flow_noise_std: 0.1
-    actuator:
-      type: pi
-      space:
-        action:
-          type: continuous
-          lower_bound: -1.0
-          upper_bound: 1.0
 
   battery_2:
     type: battery
@@ -56,13 +49,7 @@ components:
       observe_heating_flow: false
       observe_cooling_flow: false
       soc_noise_std: 0.01
-      flow_noise_std: 0.1
-    actuator:
-      type: simple
-      space:
-        action:
-          type: discrete
-          n_actions: 3           
+      flow_noise_std: 0.1       
     config:
       efficiency: 0.95
       max_power: 5.0
@@ -81,7 +68,7 @@ components:
       soc_noise_std: 0.01
       flow_noise_std: 0.1
     action_space:
-      action:
+      normalized_power:
         type: discrete
         n_actions: 5
     connection:
@@ -109,12 +96,6 @@ components:
       observe_cooling_flow: false
       soc_noise_std: 0.01
       flow_noise_std: 0.1
-    actuator:
-      type: simple
-      space:
-        action:
-          type: discrete
-          n_actions: 3
     config:
       efficiency: 0.95
       max_power: 5.0

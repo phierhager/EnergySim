@@ -3,8 +3,6 @@
 import pytest
 from energysim.core.components.local.battery.config import (
     SimpleBatteryModelConfig,
-    SimpleBatteryActionSpace,
-    SimpleActuatorConfig,
     BatteryComponentConfig,
 )
 from energysim.core.components.shared.sensors import ComponentSensorConfig
@@ -87,46 +85,18 @@ def test_simple_battery_model_config_invalid_deadband():
         SimpleBatteryModelConfig(deadband=-0.1)
 
 
-def test_simple_battery_action_space_valid():
-    # Arrange
-    discrete_space = DiscreteSpace(n_actions=3)
-
-    # Act
-    action_space = SimpleBatteryActionSpace(action=discrete_space)
-    actuator_config = SimpleActuatorConfig(space=action_space)
-
-    # Assert
-    assert action_space.action == discrete_space
-    assert actuator_config.space == action_space
-    assert actuator_config.type == "simple"
-
-
-def test_simple_battery_action_space_validate_action():
-    # Arrange
-    discrete_space = DiscreteSpace(n_actions=3)
-    action_space = SimpleBatteryActionSpace(action=discrete_space)
-    valid_action = 1
-
-    # Act & Assert - Should not raise
-    action_space.validate_action(valid_action)
-
-
 def test_battery_component_config_valid():
     # Arrange
     model_config = SimpleBatteryModelConfig()
-    actuator = SimpleActuatorConfig(
-        space=SimpleBatteryActionSpace(action=DiscreteSpace(n_actions=3))
-    )
     sensor_config = ComponentSensorConfig()
 
     # Act
     config = BatteryComponentConfig(
-        model=model_config, actuator=actuator, sensor=sensor_config
+        model=model_config, sensor=sensor_config
     )
 
     # Assert
     assert config.model == model_config
-    assert config.actuator == actuator
     assert config.sensor == sensor_config
     assert config.type == "battery"
 
@@ -134,12 +104,10 @@ def test_battery_component_config_valid():
 def test_battery_component_config_frozen():
     # Arrange
     model_config = SimpleBatteryModelConfig()
-    action_space = SimpleBatteryActionSpace(action=DiscreteSpace(n_actions=3))
-    actuator_config = SimpleActuatorConfig(space=action_space)
     sensor_config = ComponentSensorConfig()
 
     config = BatteryComponentConfig(
-        model=model_config, actuator=actuator_config, sensor=sensor_config
+        model=model_config, sensor=sensor_config
     )
 
     # Act & Assert - Should not be able to modify frozen dataclass

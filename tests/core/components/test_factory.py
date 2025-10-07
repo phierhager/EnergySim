@@ -21,7 +21,6 @@ class MockSensorConfig:
 class MockLocalConfig(BaseLocalComponentConfig):
     model: object = None
     type: str = "mock_local"
-    actuator: object = None
     sensor: MockSensorConfig = field(default_factory=MockSensorConfig)
 
 
@@ -34,9 +33,8 @@ class MockRemoteConfig(BaseRemoteComponentConfig):
 
 
 class MockLocalComponent(ComponentBase):
-    def __init__(self, model=None, actuator=None):
+    def __init__(self, model=None):
         self.model = model
-        self.actuator = actuator
 
     def initialize(self):
         return Mock()

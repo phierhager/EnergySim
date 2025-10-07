@@ -4,7 +4,6 @@ from unittest.mock import Mock
 import numpy as np
 from energysim.core.components.local.battery.component import Battery
 from energysim.core.components.local.battery.model import IBatteryModel
-from energysim.core.components.local.battery.actuator import IBatteryActuator
 from energysim.core.components.shared.component_outputs import ComponentOutputs, ElectricalStorage, ElectricalEnergy
 
 
@@ -21,33 +20,19 @@ class MockBatteryModel(IBatteryModel):
     def storage(self) -> ElectricalStorage:
         return self._storage
     
-    def apply_power(self, requested_power: float, dt_seconds: float) -> float:
-        return requested_power * dt_seconds  # Simplified for testing
-
-
-class MockBatteryActuator(IBatteryActuator):
-    def __init__(self, action_space=None):
-        self._action_space = action_space or {"action": Mock()}
-    
-    def interpret_action(self, action: np.ndarray, max_power: float) -> float:
-        return float(action[0]) * max_power
-    
-    @property
-    def action_space(self):
-        return self._action_space
+    def apply_power(self, normalized_power: float, dt_seconds: float) -> float:
+        return normalized_power * dt_seconds  # Simplified for testing
 
 
 def test_battery_initialization():
     # Arrange
     model = MockBatteryModel()
-    actuator = MockBatteryActuator()
     
     # Act
-    battery = Battery(model, actuator)
+    battery = Battery(model)
     
     # Assert
     assert battery._model == model
-    assert battery._actuator == actuator
     assert battery._initialized is False
 
 
@@ -55,8 +40,7 @@ def test_battery_initialize():
     # Arrange
     expected_storage = ElectricalStorage(capacity=100.0, soc=0.6)
     model = MockBatteryModel(storage=expected_storage)
-    actuator = MockBatteryActuator()
-    battery = Battery(model, actuator)
+    battery = Battery(model)
     
     # Act
     outputs = battery.initialize()
@@ -70,8 +54,7 @@ def test_battery_initialize():
 def test_battery_initialize_twice_raises_error():
     # Arrange
     model = MockBatteryModel()
-    actuator = MockBatteryActuator()
-    battery = Battery(model, actuator)
+    battery = Battery(model)
     battery.initialize()
     
     # Act & Assert
@@ -82,35 +65,32 @@ def test_battery_initialize_twice_raises_error():
 def test_battery_advance_without_initialization_raises_error():
     # Arrange
     model = MockBatteryModel()
-    actuator = MockBatteryActuator()
-    battery = Battery(model, actuator)
+    battery = Battery(model)
     
     # Act & Assert
     with pytest.raises(RuntimeError, match="Battery must be initialized before advancing"):
-        battery.advance({"action": np.array([1.0])}, 3600.0)
+        battery.advance({"normalized_power": np.array([1.0])}, 3600.0)
 
 
 def test_battery_advance_missing_action_raises_error():
     # Arrange
     model = MockBatteryModel()
-    actuator = MockBatteryActuator()
-    battery = Battery(model, actuator)
+    battery = Battery(model)
     battery.initialize()
     
     # Act & Assert
-    with pytest.raises(ValueError, match="Input must contain 'action' key"):
+    with pytest.raises(ValueError, match="Input must contain 'normalized_power' key"):
         battery.advance({}, 3600.0)
 
 
 def test_battery_advance_positive_power():
     # Arrange
     model = MockBatteryModel(max_power=10.0)
-    actuator = MockBatteryActuator()
-    battery = Battery(model, actuator)
+    battery = Battery(model)
     battery.initialize()
     
     action = np.array([0.5])  # 50% of max power
-    input_dict = {"action": action}
+    input_dict = {"normalized_power": action}
     dt_seconds = 3600.0
     
     # Act
@@ -129,12 +109,11 @@ def test_battery_advance_positive_power():
 def test_battery_advance_negative_power():
     # Arrange
     model = MockBatteryModel(max_power=10.0)
-    actuator = MockBatteryActuator()
-    battery = Battery(model, actuator)
+    battery = Battery(model)
     battery.initialize()
     
     action = np.array([-0.3])  # -30% of max power
-    input_dict = {"action": action}
+    input_dict = {"normalized_power": action}
     dt_seconds = 3600.0
     
     # Mock the model to return negative energy (discharge)
@@ -146,17 +125,3 @@ def test_battery_advance_negative_power():
     # Assert
     assert outputs.electrical_energy.demand_j == 0.0
     assert outputs.electrical_energy.generation_j == 10800.0
-
-
-def test_battery_action_space():
-    # Arrange
-    expected_action_space = {"action": Mock()}
-    model = MockBatteryModel()
-    actuator = MockBatteryActuator(action_space=expected_action_space)
-    battery = Battery(model, actuator)
-    
-    # Act
-    action_space = battery.action_space
-    
-    # Assert
-    assert action_space == expected_action_space

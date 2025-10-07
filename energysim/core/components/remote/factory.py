@@ -11,7 +11,7 @@ RemoteFactory = Callable[[BaseRemoteComponentConfig], RemoteComponent]
 def remote_component_factory(component_cls: type[RemoteComponent]) -> RemoteFactory:
     """
     Returns a factory function for a remote component that dynamically
-    instantiates model and actuator from the registry using the config.
+    instantiates model  from the registry using the config.
     """
 
     def factory(config: BaseRemoteComponentConfig):
