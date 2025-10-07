@@ -6,6 +6,7 @@ import yaml
 from dacite import from_dict, Config
 from enum import Enum
 from energysim.rl.factory import EnvironmentFactory, EnvironmentConfig
+import gymnasium as gym
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -68,7 +69,7 @@ components:
       soc_noise_std: 0.01
       flow_noise_std: 0.1
     action_space:
-      normalized_power:
+      action:
         type: discrete
         n_actions: 5
     connection:
@@ -140,6 +141,22 @@ reward_manager:
 params:
   random_seed: 42
 
+wrappers:
+  action_space:
+    discrete_bins:
+      battery_1: 5
+      battery_2: 3
+      battery_4: 7
+    clip_actions: true
+
+  observation_space:
+    noise_std: 0.01
+    framestack_size: 4
+    normalize: true
+    time_aware: true
+
+  misc:
+    max_episode_steps: 10
 """
 
 yaml_cfg = yaml.safe_load(yaml_str)
@@ -156,8 +173,8 @@ environment.reset()
 print("Environment reset successfully.")
 
 for _ in range(5):
-    action = environment.action_space.sample()
-    obs, reward, terminated, truncated, info = environment.step(action)
+    structured_action = environment.action_space.sample()
+    obs, reward, terminated, truncated, info = environment.step(structured_action)
     print(
         f"Step reward: {reward}, Terminated: {terminated}, Truncated: {truncated}"
     )

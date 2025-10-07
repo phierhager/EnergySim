@@ -8,10 +8,12 @@ from energysim.core.components.shared.component_outputs import (
     ElectricalEnergy,
     ThermalEnergy,
 )
+from energysim.core.data.data_bundle import DataBundle
+from energysim.core.thermal.state import ThermalState
 from energysim.core.thermal.thermal_model_base import ThermalModel
 from energysim.core.data.dataset import EnergyDataset
 from dataclasses import dataclass
-from typing import Mapping, Optional, assert_type, cast
+from typing import Any, Dict, Mapping, Optional, Tuple, assert_type, cast
 from energysim.core.components.shared.component_config import BaseComponentConfig
 from energysim.core.thermal.thermal_model_base import ThermalModelConfig
 from energysim.core.data.config import EnergyDatasetConfig
@@ -69,107 +71,211 @@ class BuildingEnvironment(Env):
         self.params = params
         self.economic_context = EconomicContext()
 
-    def reset(self):
-        # Initialize components and thermal model
-        component_outputs: dict[str, ComponentOutputs] = {}
-        for name, component in self.components.items():
-            component_outputs[name] = component.initialize()
-
-        self._timestep_index = 0
-        data_bundle = self.dataset[self._timestep_index]
-        self._timestep_index += 1
-
-        if DataColumn.PRICE in data_bundle:
-            self.economic_context.update_price(data_bundle[DataColumn.PRICE][0])
-
+    def _initialize_simulation_state(self) -> Tuple[Dict[str, 'ComponentOutputs'], 'ThermalState']:
+        """Initializes all components and the thermal model for a new episode."""
+        component_outputs: Dict[str, 'ComponentOutputs'] = {
+            name: component.initialize() for name, component in self.components.items()
+        }
         thermal_state = self.thermal_model.initialize()
+        return component_outputs, thermal_state
 
-        observations = {}
-        for sensor_name, sensor in self.comp_sensors.items():
-            # NOTE: Sensor names must match component names
-            observations[sensor_name] = sensor.read(component_outputs[sensor_name])
+    def _get_current_data_bundle(self) -> DataBundle:
+        """Retrieves the data for the current timestep."""
+        if self._timestep_index >= len(self.dataset):
+            raise IndexError("Attempted to access data beyond the dataset length.")
+        return self.dataset[self._timestep_index]
 
-        observations["thermal"] = self.thermal_sensor.read(thermal_state)
+    def _update_state_with_exogenous_data(
+        self,
+        data_bundle: DataBundle,
+        component_outputs: Dict[str, 'ComponentOutputs'],
+    ) -> Dict[str, np.ndarray]:
+        """
+        Updates the state based on external data (load, PV, price) for the current step.
+        
+        Note: This function modifies the `component_outputs` dictionary in-place by adding
+        entries for non-controllable data sources like PV and Load.
+        """
+        data_observations: Dict[str, np.ndarray] = {}
 
-        return observations, {}
-
-    def step(
-        self, action: dict[str, dict[str, np.ndarray]]
-    ) -> tuple[dict, float, bool, bool, dict]:
-        # Get load, pv, price from dataset for this timestep
-        data_bundle = self.dataset[self._timestep_index]
-        dt_seconds = data_bundle.dt_seconds
-        self._timestep_index += 1
-
-        # Advance components based on actions
-        component_outputs: dict[str, ComponentOutputs] = {}
-        for name, component in self.components.items():
-            if name not in action:
-                raise ValueError(f"Missing action for component '{name}'")
-            
-            component_outputs[name] = component.advance(
-                input={k: float(v) for k,v in action[name].items()}, dt_seconds=dt_seconds
-            )
-
-        data_observations = {}
         if DataColumn.LOAD in data_bundle:
-            # NOTE: For the observations, we will use this value directly
             load = data_bundle[DataColumn.LOAD]
             component_outputs[DataColumn.LOAD] = ComponentOutputs(
-                electrical_energy=ElectricalEnergy(demand_j=load[0]),
-                thermal_energy=ThermalEnergy(),
+                electrical_energy=ElectricalEnergy(demand_j=load[0])
             )
             data_observations[DataColumn.LOAD] = load
 
         if DataColumn.PV in data_bundle:
             pv = data_bundle[DataColumn.PV]
             component_outputs[DataColumn.PV] = ComponentOutputs(
-                electrical_energy=ElectricalEnergy(generation_j=pv[0]),
-                thermal_energy=ThermalEnergy(),
+                electrical_energy=ElectricalEnergy(generation_j=pv[0])
             )
             data_observations[DataColumn.PV] = pv
+
         if DataColumn.PRICE in data_bundle:
             prices = data_bundle[DataColumn.PRICE]
             self.economic_context.update_price(prices[0])
             data_observations[DataColumn.PRICE] = prices
+            
+        return data_observations
 
-        # Aggregate total energy flows and storage states to update thermal model
-        thermal_state = self.thermal_model.advance(
-            thermal_energy_j=sum(
-                c.thermal_energy.heating_j for c in component_outputs.values()
-            )
-            - sum(c.thermal_energy.cooling_j for c in component_outputs.values()),
-            dt_seconds=dt_seconds,
-        )
-
-        # Calculate reward
-        total_comp_out=sum(component_outputs.values(), start=ComponentOutputs())
-        context = RewardContext(
-            component_outputs=total_comp_out,
-            thermal_state=thermal_state,
-            economic_context=self.economic_context,
-        )
-
-        reward, reward_info = self.reward_manager.calculate_reward(context=context)
-
-        # Get observations from sensors
+    def _get_current_observations(
+        self,
+        component_outputs: Dict[str, 'ComponentOutputs'],
+        thermal_state: ThermalState,
+        data_observations: Dict[str, np.ndarray],
+    ) -> Dict[str, Any]:
+        """Assembles the complete observation dictionary from all sources."""
         observations = {}
+        # Get observations from controllable component sensors
         for sensor_name, sensor in self.comp_sensors.items():
             # NOTE: Sensor names must match component names
             observations[sensor_name] = sensor.read(component_outputs[sensor_name])
+
+        # Get observation from the thermal model sensor
         observations["thermal"] = self.thermal_sensor.read(thermal_state)
-        # NOTE: Add dataset observations (also prediction values if available)
+        
+        # Add observations from the external dataset (load, pv, price, etc.)
         observations["data"] = data_observations
 
-        done = self._timestep_index >= len(self.dataset)
+        return observations
 
+    # --- Private Helper Methods for Step Logic ---
+
+    def _advance_controllable_components(
+        self, action: Dict[str, Dict[str, np.ndarray]], dt_seconds: float
+    ) -> Dict[str, 'ComponentOutputs']:
+        """Advances all controllable components based on the agent's action."""
+        component_outputs: Dict[str, 'ComponentOutputs'] = {}
+        for name, component in self.components.items():
+            if name not in action:
+                raise ValueError(f"Missing action for component '{name}'")
+            
+            component_action = {k: float(v) for k, v in action[name].items()}
+            component_outputs[name] = component.advance(
+                input=component_action, dt_seconds=dt_seconds
+            )
+        return component_outputs
+
+    def _advance_thermal_model(
+        self, component_outputs: Dict[str, 'ComponentOutputs'], dt_seconds: float
+    ) -> 'ThermalState':
+        """Advances the thermal model using the aggregated thermal energy flows."""
+        total_heating_j = sum(
+            c.thermal_energy.heating_j for c in component_outputs.values()
+        )
+        total_cooling_j = sum(
+            c.thermal_energy.cooling_j for c in component_outputs.values()
+        )
+        net_thermal_energy_j = total_heating_j - total_cooling_j
+        
+        return self.thermal_model.advance(
+            thermal_energy_j=net_thermal_energy_j, dt_seconds=dt_seconds
+        )
+
+    def _calculate_reward_and_info(
+        self,
+        component_outputs: Dict[str, 'ComponentOutputs'],
+        thermal_state: 'ThermalState',
+    ) -> Tuple[float, Dict[str, Any], Dict[str, Any]]:
+        """Calculates the reward and constructs the info dictionary."""
+        total_component_outputs = sum(component_outputs.values(), start=ComponentOutputs())
+        
+        # Calculate reward
+        reward_context = RewardContext(
+            component_outputs=total_component_outputs,
+            thermal_state=thermal_state,
+            economic_context=self.economic_context,
+        )
+        reward, reward_info = self.reward_manager.calculate_reward(context=reward_context)
+
+        # Assemble info dictionary
         info = {
             "reward": reward_info,
-            "energy_consumption": total_comp_out.electrical_energy.net,
-            "temperature_error": thermal_state.temperature_error
+            "energy_consumption": total_component_outputs.electrical_energy.net,
+            "temperature_error": thermal_state.temperature_error,
         }
+        
+        return reward, reward_info, info
 
-        return observations, reward, done, False, info
+    def reset(self, seed: int = None, options: Dict[str, Any] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Resets the environment to its initial state for a new episode.
+        """
+        super().reset(seed=seed, options=options)
+
+        # 1. Reset internal simulation state (components, thermal model)
+        component_outputs, thermal_state = self._initialize_simulation_state()
+        
+        # 2. Reset time to the beginning of the dataset
+        self._timestep_index = 0
+        
+        # 3. Get the initial data bundle (t=0)
+        initial_data_bundle = self._get_current_data_bundle()
+        
+        # 4. Process exogenous data to update state and get data observations
+        data_observations = self._update_state_with_exogenous_data(
+            data_bundle=initial_data_bundle,
+            component_outputs=component_outputs,
+        )
+
+        # 5. Assemble the complete initial observation
+        observations = self._get_current_observations(
+            component_outputs=component_outputs,
+            thermal_state=thermal_state,
+            data_observations=data_observations,
+        )
+        print()
+        print()
+        print()
+        print(f"Initial observation: {observations}")
+        # The info dict is typically empty on reset
+        info = {}
+
+        return observations, info
+
+    def step(
+        self, action: Dict[str, Dict[str, np.ndarray]]
+    ) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
+        """
+        Advances the environment by one timestep based on the given action.
+        """
+        # 1. Get data for the current timestep
+        data_bundle = self._get_current_data_bundle()
+        dt_seconds = data_bundle.dt_seconds
+
+        # 2. Advance controllable components based on agent's action
+        component_outputs = self._advance_controllable_components(action, dt_seconds)
+
+        # 3. Process this timestep's exogenous data (load, PV, price)
+        #    This adds their energy contributions to the `component_outputs` dict
+        data_observations = self._update_state_with_exogenous_data(
+            data_bundle=data_bundle,
+            component_outputs=component_outputs,
+        )
+
+        # 4. Advance the thermal model using the combined thermal effects
+        thermal_state = self._advance_thermal_model(component_outputs, dt_seconds)
+        
+        # 5. Calculate reward and supplemental info for this step
+        reward, reward_info, info = self._calculate_reward_and_info(
+            component_outputs, thermal_state
+        )
+
+        # 6. Assemble the observation for the *next* state
+        observations = self._get_current_observations(
+            component_outputs, thermal_state, data_observations
+        )
+
+        # 7. Advance the simulation time
+        self._timestep_index += 1
+
+        # 8. Determine if the episode is finished
+        terminated = self._timestep_index >= len(self.dataset)
+        truncated = False  # Assuming no other truncation conditions for now
+
+        return observations, reward, terminated, truncated, info
+
 
     @property
     def action_space(self) -> spaces.Space:
@@ -183,12 +289,15 @@ class BuildingEnvironment(Env):
         spaces_dict = {}
 
         # Add dataset observations
-        spaces_dict["data"] = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(self.dataset.num_features,),
-            dtype=np.float32,
-        )
+        spaces_dict["data"] = spaces.Dict({
+            col: spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(1 + (self.dataset.params.prediction_horizon or 0),),
+                dtype=np.float32,
+            )
+            for col in [DataColumn.LOAD, DataColumn.PV, DataColumn.PRICE] if col in self.dataset.params.feature_columns
+        })
 
         # Add component observation spaces
         for sensor_name, sensor in self.comp_sensors.items():
