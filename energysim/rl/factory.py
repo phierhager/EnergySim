@@ -1,13 +1,7 @@
-from enum import Enum
-from typing import Dict, Union
-from energysim.core.components.base import (
-    ComponentBase,
-    ComponentOutputs,
-)
+from typing import Dict
 from dataclasses import dataclass
 
 from energysim.core.thermal.thermal_model_base import (
-    ThermalModel,
     ThermalModelConfig,
 )
 from energysim.rl.building_environment import (
@@ -18,15 +12,12 @@ from energysim.rl.building_environment import (
     BuildingEnvironment,
 )
 from energysim.core.components.sensors import (
-    Sensor,
     ThermalSensor,
     ThermalSensorConfig,
-    ComponentSensorConfig,
     ComponentSensor,
 )
 from energysim.core.data.config import EnergyDatasetConfig
 from energysim.rl.rewards.reward_config import EconomicConfig, RewardConfig
-from energysim.core.data.dataset import EnergyDataset
 from energysim.core.components.config_types import ComponentConfig
 from energysim.core.components.factory import build_component
 from energysim.core.thermal.factory import build_thermal_model
@@ -36,7 +27,6 @@ from energysim.rl.wrappers.action_discretizer import ActionDiscretizerWrapper
 from energysim.rl.wrappers.action_flattener import ActionFlattenerWrapper
 
 
-from dacite import from_dict, Config
 import gymnasium as gym
 import numpy as np
 

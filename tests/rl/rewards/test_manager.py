@@ -1,5 +1,4 @@
 """Tests for reward manager implementation."""
-import pytest
 from unittest.mock import Mock
 from energysim.rl.rewards.manager import RewardManager
 from energysim.rl.rewards.layers.base import RewardLayer

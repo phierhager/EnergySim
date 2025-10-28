@@ -1,22 +1,14 @@
-from dataclasses import dataclass
-from typing import ClassVar, Literal, Union
 
 from energysim.core.components.battery.config import (
     DegradingBatteryModelConfig,
     SimpleBatteryModelConfig,
 )
-from energysim.core.components.base import ComponentBase
 from energysim.core.components.model_base import ModelBase
 from energysim.core.components.outputs import (
     ElectricalStorage,
-    ElectricalEnergy,
-    ComponentOutputs,
 )
-from energysim.core.components.config_base import BaseComponentConfig
-from energysim.core.components.spaces import Space
 from energysim.core.components.registry import register_model
-from dacite import from_dict
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 
 
 class BatteryModelBase(ModelBase):

@@ -6,23 +6,17 @@ from energysim.core.components.base import (
 from energysim.core.components.outputs import (
     ComponentOutputs,
     ElectricalEnergy,
-    ThermalEnergy,
 )
 from energysim.core.thermal.state import ThermalState
 from energysim.core.thermal.thermal_model_base import ThermalModel
 from energysim.core.data.dataset import EnergyDataset
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Tuple, assert_type, cast
-from energysim.core.components.config_base import BaseComponentConfig
-from energysim.core.thermal.thermal_model_base import ThermalModelConfig
-from energysim.core.data.config import EnergyDatasetConfig
-from energysim.rl.rewards.reward_config import EconomicConfig, RewardConfig
+from typing import Any, Dict, Mapping, Optional, Tuple
 from energysim.rl.rewards.contexts import (
     RewardContext,
 )
 from energysim.rl.rewards.manager import RewardManager
 from energysim.core.components.sensors import Sensor
-from enum import StrEnum
 from energysim.core.state import SimulationState
 from energysim.rl.data_column import DataColumn
 

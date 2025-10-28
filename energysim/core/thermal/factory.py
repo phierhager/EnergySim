@@ -1,9 +1,7 @@
-from energysim.core.thermal.simple_air_model import SimpleAirModel
 from energysim.core.thermal.thermal_model_base import (
     ThermalModel,
     ThermalModelConfig,
 )
-from typing import Optional
 from energysim.core.thermal.registry import registry
 
 

@@ -1,6 +1,6 @@
-from typing import ClassVar, Literal, TypeVar, Union, overload
+from typing import Literal, Union
 from energysim.core.components.config_base import BaseComponentConfig
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

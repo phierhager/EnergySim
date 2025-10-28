@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import ClassVar, Literal, Protocol, Union
+from typing import ClassVar, Literal, Union
 from abc import abstractmethod, ABC
 import numpy as np
 

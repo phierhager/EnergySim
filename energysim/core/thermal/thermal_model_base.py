@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
-from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from dataclasses import asdict
+from typing import Any, Dict, Optional
 from energysim.core.thermal.config import ThermalModelConfig
 from energysim.core.thermal.state import ThermalState
 from energysim.core.state import SimulationState

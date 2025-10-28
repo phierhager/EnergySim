@@ -1,7 +1,7 @@
 """File-based data source implementation."""
 
 from dataclasses import dataclass
-from typing import Tuple, Dict, Sequence, Literal
+from typing import Tuple, Dict, Literal
 import numpy as np
 import pandas as pd
 

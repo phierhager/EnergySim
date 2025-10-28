@@ -8,7 +8,6 @@ from energysim.core.thermal.thermal_model_base import ThermalState
 from energysim.core.components.spaces import (
     DictSpace,
     Space,
-    DiscreteSpace,
     ContinuousSpace,
 )
 

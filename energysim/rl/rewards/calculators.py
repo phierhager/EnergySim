@@ -1,17 +1,13 @@
 """Calculation services for extracting KPIs from domain objects."""
 
-from dataclasses import dataclass
-import math
 
 from energysim.core.thermal.thermal_model_base import ThermalState
 from energysim.core.components.outputs import ComponentOutputs
 from energysim.rl.rewards.metrics import (
     EnergyMetrics,
-    ComfortMetrics,
     EfficiencyMetrics,
     PeakDemandMetrics,
 )
-from energysim.rl.rewards.reward_config import EconomicConfig
 
 
 class EnergyMetricsCalculator:

@@ -1,9 +1,6 @@
-import numpy as np
 from energysim.core.data.sources.base import DataRequest, DataSource
-from energysim.core.data.sources.factory import DataSourceFactory
-from dataclasses import dataclass
 from energysim.core.timestep_data import TimestepData
-from energysim.core.data.config import EnergyDatasetConfig, EnergyDatasetParams
+from energysim.core.data.config import EnergyDatasetParams
 from energysim.core.data.transforms import get_time_features
 
 

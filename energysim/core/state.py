@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from typing import Dict
-import numpy as np
 
 from .thermal.state import ThermalState
 from .components.outputs import ComponentOutputs

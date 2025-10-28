@@ -1,6 +1,5 @@
 """Class-level factory for simplified reward system creation."""
 
-from typing import Dict
 import logging
 
 from energysim.rl.rewards.layers import (

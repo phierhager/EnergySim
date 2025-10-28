@@ -6,7 +6,6 @@ import yaml
 from dacite import from_dict, Config
 from enum import Enum
 from energysim.rl.factory import EnvironmentFactory, EnvironmentConfig
-import gymnasium as gym
 
 logging.basicConfig(level=logging.DEBUG)
 

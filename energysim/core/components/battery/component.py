@@ -2,9 +2,8 @@ from energysim.core.components.battery.model import (
     BatteryModelBase,
 )
 from energysim.core.components.base import ComponentBase
-from energysim.core.components.spaces import ContinuousSpace, DictSpace, Space
+from energysim.core.components.spaces import ContinuousSpace, DictSpace
 from energysim.core.components.base import (
-    ComponentBase,
     ComponentOutputs,
 )
 from energysim.core.components.outputs import ElectricalEnergy
@@ -12,7 +11,6 @@ from energysim.core.components.registry import register_component
 from energysim.core.components.battery.config import (
     BatteryComponentConfig,
 )
-import numpy as np
 
 from energysim.core.state import SimulationState
 

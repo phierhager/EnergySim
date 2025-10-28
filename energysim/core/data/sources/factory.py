@@ -1,4 +1,3 @@
-from typing import Dict, Type
 
 from energysim.core.data.sources.base import (
     DataSource,

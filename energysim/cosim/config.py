@@ -1,11 +1,9 @@
-from dataclasses import dataclass, field
-from typing import Dict, Any, Literal
+from dataclasses import dataclass
+from typing import Dict
 from energysim.core.components.config_types import ComponentConfig
 from energysim.core.components.sensors import ThermalSensorConfig
 from energysim.core.data.config import EnergyDatasetConfig
 from energysim.core.thermal.config import ThermalModelConfig
-from energysim.rl.building_environment import EnvironmentParameters
-from energysim.rl.factory import EnvironmentConfig
 
 @dataclass
 class BuildingSimulationConfig:

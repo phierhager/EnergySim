@@ -5,10 +5,6 @@ from energysim.core.components.factory import build_component
 from energysim.core.thermal.factory import build_thermal_model
 from energysim.core.data.factory import build_dataset
 
-from energysim.core.components.sensors import (
-    ComponentSensor,
-    ThermalSensor,
-)
 
 class SimulatorFactory:
     @staticmethod
