@@ -19,6 +19,5 @@ print("Simulator reset successfully.")
 for _ in range(50):
     random_action = simulator.action_space.sample()
     output = simulator.step(random_action)
-    print(f"Step {_ + 1} completed.")
-    print(f"Simulation output: {output}")
+    print("Observations: ", output.observations)
 print("Simulation steps completed successfully.")

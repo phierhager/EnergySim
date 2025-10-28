@@ -69,12 +69,12 @@ class ComponentSensor(Sensor):
         if self.config.observe_electrical_soc:
             soc = comp_out.electrical_storage.soc
             soc += np.random.normal(0, self.config.soc_noise_std)
-            obs["electrical_soc"] = np.clip(soc, 0.0, 1.0)
+            obs["electrical_soc"] = float(np.clip(soc, 0.0, 1.0))
 
         if self.config.observe_thermal_soc:
             soc = comp_out.thermal_storage.soc
             soc += np.random.normal(0, self.config.soc_noise_std)
-            obs["thermal_soc"] = np.clip(soc, 0.0, 1.0)
+            obs["thermal_soc"] = float(np.clip(soc, 0.0, 1.0))
 
         # Energy flow observations
         if self.config.observe_electrical_flow:
@@ -83,17 +83,17 @@ class ComponentSensor(Sensor):
                 - comp_out.electrical_energy.demand_j
             )
             net_flow += np.random.normal(0, self.config.flow_noise_std)
-            obs["electrical_flow"] = net_flow
+            obs["electrical_flow"] = float(net_flow)
 
         if self.config.observe_heating_flow:
             flow = comp_out.thermal_energy.heating_j
             flow += np.random.normal(0, self.config.flow_noise_std)
-            obs["heating_flow"] = flow
+            obs["heating_flow"] = float(flow)
 
         if self.config.observe_cooling_flow:
             flow = comp_out.thermal_energy.cooling_j
             flow += np.random.normal(0, self.config.flow_noise_std)
-            obs["cooling_flow"] = flow
+            obs["cooling_flow"] = float(flow)
 
         return obs
 
@@ -138,12 +138,12 @@ class ThermalSensor(Sensor):
         obs = {}
 
         if self.config.observe_indoor_temp:
-            obs["temperature"] = thermal_state.temperature + np.random.normal(
+            obs["temperature"] = float(thermal_state.temperature + np.random.normal(
                 0, self.config.temp_noise_std
-            )
+            ))
 
         if self.config.observe_temp_error:
-            obs["temperature_error"] = thermal_state.temperature_error
+            obs["temperature_error"] = float(thermal_state.temperature_error)
 
         if self.config.observe_comfort_violation:
             obs["comfort_violation"] = float(thermal_state.comfort_violation)
@@ -152,9 +152,9 @@ class ThermalSensor(Sensor):
             if thermal_state.zone_temperatures is None:
                 raise ValueError("Zone temperatures requested but not available.")
             for zone, temp in thermal_state.zone_temperatures.items():
-                obs[f"temp_{zone}"] = temp + np.random.normal(
+                obs[f"temp_{zone}"] = float(temp + np.random.normal(
                     0, self.config.temp_noise_std
-                )
+                ))
 
         return obs
 

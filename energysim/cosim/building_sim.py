@@ -1,15 +1,21 @@
 
 from dataclasses import dataclass
-from typing import Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional, Any, Union, TypedDict
 import numpy as np
 
 from energysim.core.components.base import ComponentBase
 from energysim.core.components.outputs import ComponentOutputs, ElectricalEnergy
+from energysim.core.components.sensors import Sensor
 from energysim.core.components.spaces import DictSpace, Space
 from energysim.core.thermal.state import ThermalState
 from energysim.core.thermal.thermal_model_base import ThermalModel
 from energysim.core.data.dataset import EnergyDataset
 from energysim.core.state import SimulationState
+
+class ObservationDict(TypedDict):
+    thermal: dict[str, dict[str, float]]
+    data: dict[str, np.ndarray]
+    components: dict[str, dict[str, float]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +40,9 @@ class SimulationTimestepResult:
     # The aggregated net energy flows *during* the timestep (balance_t)
     system_balance: ComponentOutputs
 
+    # Observations collected during the timestep
+    observations: ObservationDict
+
 
 class BuildingSimulator:
     """
@@ -55,6 +64,8 @@ class BuildingSimulator:
     def __init__(
         self,
         components: Mapping[str, ComponentBase],
+        comp_sensors: Mapping[str, Sensor],
+        thermal_sensor: Sensor,
         dataset: EnergyDataset,
         thermal_model: ThermalModel,
     ):
@@ -62,6 +73,8 @@ class BuildingSimulator:
         self.components = components
         self.dataset = dataset
         self.thermal_model = thermal_model
+        self.comp_sensors = comp_sensors
+        self.thermal_sensor = thermal_sensor
 
         # Internal state, managed by step() and reset()
         self._timestep_index: int = 0
@@ -101,13 +114,19 @@ class BuildingSimulator:
         initial_balance = sum(
             self._current_component_outputs.values(), start=ComponentOutputs()
         )
+        observations = self._assemble_observation(
+            final_thermal_state=self._current_thermal_state,
+            endogenous_outputs=self._current_component_outputs,
+            simulation_state=initial_sim_state
+        )
 
         initial_result = SimulationTimestepResult(
             timestamp=initial_timestep_data.timestamp,
             simulation_state=initial_sim_state,
             component_outputs=self._current_component_outputs,
             final_thermal_state=self._current_thermal_state,
-            system_balance=initial_balance
+            system_balance=initial_balance,
+            observations=observations
         )
 
         return initial_result
@@ -180,6 +199,13 @@ class BuildingSimulator:
             dt_seconds=dt_seconds
         )
 
+        # Collect observations from components
+        observations = self._assemble_observation(
+            final_thermal_state=new_thermal_state,
+            endogenous_outputs=endogenous_outputs,
+            simulation_state=current_state
+        )
+
         # --- FINALIZATION ---
         # Update internal state to reflect the end of the interval [t, t+1]
         self._current_thermal_state = new_thermal_state
@@ -191,10 +217,19 @@ class BuildingSimulator:
             simulation_state=current_state,
             component_outputs=endogenous_outputs,
             final_thermal_state=new_thermal_state,
-            system_balance=system_balance
+            system_balance=system_balance,
+            observations=observations
         )
         
         return result
+    
+    def _assemble_observation(self, final_thermal_state: ThermalState, endogenous_outputs: Dict[str, ComponentOutputs], simulation_state: SimulationState) -> ObservationDict:
+        """Assembles the complete observation dictionary from the final state of a step."""
+        return ObservationDict(
+            thermal=self.thermal_sensor.read(final_thermal_state),
+            data=simulation_state.timestep_data.features,
+            components={name: sensor.read(endogenous_outputs[name]) for name, sensor in self.comp_sensors.items()}
+        )
 
     @property
     def current_simulation_state(self) -> SimulationState:

@@ -1,3 +1,4 @@
+from energysim.core.components.sensors import ComponentSensor, ThermalSensor
 from energysim.cosim.config import BuildingSimulationConfig
 from energysim.cosim.building_sim import BuildingSimulator
 
@@ -14,11 +15,22 @@ class SimulatorFactory:
         components = {
             name: build_component(cfg) for name, cfg in config.components.items()
         }
+        component_sensors = {
+            name: ComponentSensor(cfg)
+            for name, cfg in zip(
+                config.components.keys(),
+                [cfg.sensor for cfg in config.components.values()],
+            )
+        }
+        thermal_sensor = ThermalSensor(config.thermal_sensor)
         thermal_model = build_thermal_model(config.thermal_model)
         dataset = build_dataset(config.dataset)
+
 
         return BuildingSimulator(
             components=components,
             thermal_model=thermal_model,
             dataset=dataset,
+            comp_sensors=component_sensors,
+            thermal_sensor=thermal_sensor,
         )
