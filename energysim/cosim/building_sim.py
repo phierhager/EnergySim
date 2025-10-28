@@ -176,7 +176,7 @@ class BuildingSimulator:
         # (which contains ambient temp, etc. for t+1)
         new_thermal_state = self.thermal_model.advance(
             thermal_energy_j=system_balance.thermal_energy.net_heating,
-            state=current_state,
+            ambient_temperature=current_state.timestep_data["ambient_temperature"][0],
             dt_seconds=dt_seconds
         )
 

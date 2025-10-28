@@ -3,7 +3,6 @@ from dataclasses import asdict
 from typing import Any, Dict, Optional
 from energysim.core.thermal.config import ThermalModelConfig
 from energysim.core.thermal.state import ThermalState
-from energysim.core.state import SimulationState
 
 class ThermalModel(ABC):
     """
@@ -29,7 +28,7 @@ class ThermalModel(ABC):
         )
 
     @abstractmethod
-    def advance(self, thermal_energy_j: float, state: SimulationState, dt_seconds: float) -> ThermalState:
+    def advance(self, thermal_energy_j: float, ambient_temperature: float, dt_seconds: float) -> ThermalState:
         """
         Advance thermal model by one time step.
 

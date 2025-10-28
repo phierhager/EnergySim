@@ -1,4 +1,3 @@
-from energysim.core.state import SimulationState
 from energysim.core.thermal.thermal_model_base import (
     ThermalModel,
     ThermalState,
@@ -23,7 +22,7 @@ class SimpleAirModel(ThermalModel):
         self.air_mass = config.building_volume * config.air_density  # kg
         self.thermal_capacity = self.air_mass * config.specific_heat_air  # J/°C
 
-    def advance(self, thermal_energy_j: float, state: SimulationState, dt_seconds: float) -> ThermalState:
+    def advance(self, thermal_energy_j: float, ambient_temperature: float, dt_seconds: float) -> ThermalState:
         """
         Update temperature based on thermal energy input.
 
@@ -34,8 +33,7 @@ class SimpleAirModel(ThermalModel):
         temp_change = thermal_energy_j / self.thermal_capacity
 
         # Calculate heat loss to ambient (simple model)
-        ambient_temp = state.timestep_data["ambient_temperature"][0]
-        temp_diff_to_ambient = self.state.temperature - ambient_temp
+        temp_diff_to_ambient = self.state.temperature - ambient_temperature
 
         # Heat loss rate (W/°C) - simplified model
         heat_loss_rate = self.config.heat_transfer_coefficient

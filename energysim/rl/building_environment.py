@@ -136,7 +136,7 @@ class BuildingEnvironment(Env):
         # Advance the thermal model using the final balance
         new_thermal_state = self.thermal_model.advance(
             thermal_energy_j=system_balance.thermal_energy.net_heating,
-            state=current_state,
+            ambient_temperature=current_state.timestep_data["ambient_temperature"][0],
             dt_seconds=dt_seconds
         )
 
