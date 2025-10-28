@@ -1,24 +1,25 @@
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Union
 
-from energysim.core.components.local.battery.config import (
+from energysim.core.components.battery.config import (
     DegradingBatteryModelConfig,
     SimpleBatteryModelConfig,
 )
-from energysim.core.components.shared.component_base import ComponentBase
-from energysim.core.components.shared.component_outputs import (
+from energysim.core.components.base import ComponentBase
+from energysim.core.components.model_base import ModelBase
+from energysim.core.components.outputs import (
     ElectricalStorage,
     ElectricalEnergy,
     ComponentOutputs,
 )
-from energysim.core.components.shared.component_config import BaseComponentConfig
-from energysim.core.components.shared.spaces import Space
+from energysim.core.components.config_base import BaseComponentConfig
+from energysim.core.components.spaces import Space
 from energysim.core.components.registry import register_model
 from dacite import from_dict
 from abc import ABC, abstractmethod
 
 
-class IBatteryModel(ABC):
+class BatteryModelBase(ModelBase):
     @property
     @abstractmethod
     def max_power(self) -> float:
@@ -36,7 +37,7 @@ class IBatteryModel(ABC):
 
 
 @register_model(SimpleBatteryModelConfig)
-class SimpleBatteryModel(IBatteryModel):
+class SimpleBatteryModel(BatteryModelBase):
     def __init__(self, config: SimpleBatteryModelConfig):
         self._config = config
         self._storage = ElectricalStorage(capacity=config.capacity, soc=config.init_soc)
@@ -87,7 +88,7 @@ class SimpleBatteryModel(IBatteryModel):
 
 
 @register_model(DegradingBatteryModelConfig)
-class DegradingBatteryModel(IBatteryModel):
+class DegradingBatteryModel(BatteryModelBase):
     """Battery model with capacity degradation."""
 
     def __init__(self, config: DegradingBatteryModelConfig):

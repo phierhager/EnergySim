@@ -21,11 +21,11 @@ class GridStabilityRewardLayer(RewardLayer):
     def calculate_reward(self, context: RewardContext) -> float:
         reward = 0.0
         if (
-            abs(context.component_outputs.electrical_energy.net)
+            abs(context.system_balance.electrical_energy.net)
             < self.balance_tolerance
         ):
             reward += self.balance_bonus
-        if context.component_outputs.electrical_storage.soc is not None:
-            if 0.2 <= context.component_outputs.electrical_storage.soc <= 0.8:
+        if context.system_balance.electrical_storage.soc is not None:
+            if 0.2 <= context.system_balance.electrical_storage.soc <= 0.8:
                 reward += self.storage_bonus
         return reward

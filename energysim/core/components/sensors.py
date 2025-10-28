@@ -3,9 +3,9 @@ from dataclasses import dataclass
 from typing import Any, Optional
 import numpy as np
 
-from energysim.core.components.shared.component_base import ComponentOutputs
+from energysim.core.components.base import ComponentOutputs
 from energysim.core.thermal.thermal_model_base import ThermalState
-from energysim.core.components.shared.spaces import (
+from energysim.core.components.spaces import (
     Space,
     DiscreteSpace,
     ContinuousSpace,

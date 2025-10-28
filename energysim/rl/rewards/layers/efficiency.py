@@ -22,11 +22,14 @@ class EfficiencyRewardLayer(RewardLayer):
         self.self_consumption_bonus = self_consumption_bonus
 
     def calculate_reward(self, context: RewardContext) -> float:
-        energy_metrics = EnergyMetricsCalculator.get_energy_metrics(
-            context.component_outputs, context.economic_context
+        renewable_fraction = EnergyMetricsCalculator.calculate_renewable_fraction(
+            context.system_balance
         )
-        renewable_reward = energy_metrics.renewable_fraction * self.renewable_bonus
+        self_consumption_ratio = EnergyMetricsCalculator.calculate_self_consumption_ratio(
+            context.system_balance
+        )
+        renewable_reward = renewable_fraction * self.renewable_bonus
         self_consumption_reward = (
-            energy_metrics.self_consumption_ratio * self.self_consumption_bonus
+            self_consumption_ratio * self.self_consumption_bonus
         )
         return renewable_reward + self_consumption_reward

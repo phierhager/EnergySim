@@ -1,6 +1,5 @@
 from energysim.rl.rewards.layers.base import RewardLayer
 from energysim.rl.rewards.contexts import (
-    EconomicContext,
     RewardContext,
 )
 from energysim.rl.rewards.calculators import (

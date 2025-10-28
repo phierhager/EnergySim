@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Dict, Union
-from energysim.core.components.shared.component_base import (
+from energysim.core.components.base import (
     ComponentBase,
     ComponentOutputs,
 )
@@ -17,7 +17,7 @@ from energysim.rl.rewards.factory import RewardManagerFactory
 from energysim.rl.building_environment import (
     BuildingEnvironment,
 )
-from energysim.core.components.shared.sensors import (
+from energysim.core.components.sensors import (
     Sensor,
     ThermalSensor,
     ThermalSensorConfig,
@@ -25,9 +25,9 @@ from energysim.core.components.shared.sensors import (
     ComponentSensor,
 )
 from energysim.core.data.config import EnergyDatasetConfig
-from energysim.rl.rewards.reward_config import RewardConfig
+from energysim.rl.rewards.reward_config import EconomicConfig, RewardConfig
 from energysim.core.data.dataset import EnergyDataset
-from energysim.core.components.config import ComponentConfig
+from energysim.core.components.config_types import ComponentConfig
 from energysim.core.components.factory import build_component
 from energysim.core.thermal.factory import build_thermal_model
 from energysim.core.data.factory import build_dataset
@@ -47,6 +47,7 @@ class EnvironmentConfig:
     thermal_model: ThermalModelConfig
     dataset: EnergyDatasetConfig
     reward_manager: RewardConfig
+    economic: EconomicConfig
     params: EnvironmentParameters
     wrappers: dict = None  # Optional wrappers to apply
 
@@ -69,7 +70,7 @@ class EnvironmentFactory:
         thermal_sensor = ThermalSensor(config.thermal_sensor)
         thermal_model = build_thermal_model(config.thermal_model)
         dataset = build_dataset(config.dataset)
-        reward_manager = RewardManagerFactory.create(config.reward_manager)
+        reward_manager = RewardManagerFactory.create(config.reward_manager, config.economic)
 
         building_env = BuildingEnvironment(
             components=components,

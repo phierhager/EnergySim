@@ -1,23 +1,25 @@
-from energysim.core.components.local.battery.model import (
-    IBatteryModel,
+from energysim.core.components.battery.model import (
+    BatteryModelBase,
 )
-from energysim.core.components.local.shared.component import LocalComponent
-from energysim.core.components.shared.spaces import ContinuousSpace, Space
-from energysim.core.components.shared.component_base import (
+from energysim.core.components.base import ComponentBase
+from energysim.core.components.spaces import ContinuousSpace, Space
+from energysim.core.components.base import (
     ComponentBase,
     ComponentOutputs,
 )
-from energysim.core.components.shared.component_outputs import ElectricalEnergy
-from energysim.core.components.registry import register_local_component
-from energysim.core.components.local.battery.config import (
+from energysim.core.components.outputs import ElectricalEnergy
+from energysim.core.components.registry import register_component
+from energysim.core.components.battery.config import (
     BatteryComponentConfig,
 )
 import numpy as np
 
+from energysim.core.state import SimulationState
 
-@register_local_component(BatteryComponentConfig)
-class Battery(LocalComponent):
-    def __init__(self, model: IBatteryModel):
+
+@register_component(BatteryComponentConfig)
+class Battery(ComponentBase):
+    def __init__(self, model: BatteryModelBase):
         self._model = model
         self._initialized = False
 
@@ -28,15 +30,15 @@ class Battery(LocalComponent):
         return ComponentOutputs(electrical_storage=self._model.storage)
 
     def advance(
-        self, input: dict[str, float], dt_seconds: float
+        self, action: dict[str, float], state: SimulationState, dt_seconds: float
     ) -> ComponentOutputs:
         if not self._initialized:
             raise RuntimeError("Battery must be initialized before advancing.")
 
-        if "normalized_power" not in input:
+        if "normalized_power" not in action:
             raise ValueError("Input must contain 'normalized_power' key.")
 
-        normalized_power = input["normalized_power"] # in [-1, 1]
+        normalized_power = action["normalized_power"] # in [-1, 1]
         power = normalized_power * self._model.max_power # in Watts
         energy_transfer = self._model.apply_power(power, dt_seconds)
 

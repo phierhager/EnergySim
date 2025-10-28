@@ -3,15 +3,15 @@
 from dataclasses import dataclass
 import math
 
-from energysim.rl.rewards.contexts import EconomicContext
 from energysim.core.thermal.thermal_model_base import ThermalState
-from energysim.core.components.shared.component_outputs import ComponentOutputs
+from energysim.core.components.outputs import ComponentOutputs
 from energysim.rl.rewards.metrics import (
     EnergyMetrics,
     ComfortMetrics,
     EfficiencyMetrics,
     PeakDemandMetrics,
 )
+from energysim.rl.rewards.reward_config import EconomicConfig
 
 
 class EnergyMetricsCalculator:
@@ -49,12 +49,11 @@ class EnergyMetricsCalculator:
     @staticmethod
     def get_energy_metrics(
         component_outputs: ComponentOutputs,
-        economic_context: EconomicContext,
         grid_emission_factor: float = 0.4e-6,
     ) -> EnergyMetrics:
         return EnergyMetrics(
             net_energy_j=component_outputs.electrical_energy.net,
-            energy_cost_eur=economic_context.calculate_energy_cost(
+            energy_cost_eur=EnergyMetricsCalculator.calculate_energy_cost(
                 component_outputs.electrical_energy.net
             ),
             renewable_fraction=EnergyMetricsCalculator.calculate_renewable_fraction(
@@ -72,6 +71,34 @@ class EnergyMetricsCalculator:
             net_heating_j=component_outputs.thermal_energy.net_heating,
         )
 
+    @staticmethod
+    def calculate_energy_cost(tax_rate: float, price_eur_per_j: float, net_energy_j: float, feed_in_tariff_eur_per_j: float) -> float:
+            """
+            Calculate energy cost based on net energy consumption.
+
+            Args:
+                net_energy_j: Net energy in joules (positive = consumption, negative = generation)
+
+            Returns:
+                Cost in euros (positive = cost, negative = revenue)
+            """
+            if net_energy_j > 0:
+                # Energy consumption
+                base_cost = net_energy_j * price_eur_per_j
+                return base_cost * (1 + tax_rate)
+            else:
+                # Energy generation (feed-in)
+                return net_energy_j * feed_in_tariff_eur_per_j  # Negative value = revenue
+
+    @staticmethod
+    def calculate_demand_charge(demand_charge_threshold_j: float, demand_charge_rate_eur_per_j: float, peak_power_w: float, duration_s: float) -> float:
+        """Calculate demand charges for peak power usage."""
+        if peak_power_w <= demand_charge_rate_eur_per_j * 1000:  # Convert kW to W
+            return 0.0
+
+        excess_power_w = peak_power_w - (demand_charge_threshold_j * 1000)
+        excess_energy_j = excess_power_w * duration_s
+        return excess_energy_j * demand_charge_rate_eur_per_j
 
 class ComfortMetricsCalculator:
     """Calculates comfort-related KPIs from comfort metrics."""

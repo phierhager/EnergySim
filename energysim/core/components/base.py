@@ -1,10 +1,14 @@
 from abc import ABC, abstractmethod
-from energysim.core.components.shared.component_outputs import ComponentOutputs
-from energysim.core.components.shared.spaces import Space
-
+from energysim.core.components.outputs import ComponentOutputs
+from energysim.core.components.spaces import Space  
+from energysim.core.components.model_base import ModelBase
+from energysim.core.state import SimulationState
 
 class ComponentBase(ABC):
     """Abstract base class for all components in the BEMS simulation framework."""
+    @abstractmethod
+    def __init__(self, model: ModelBase) -> None:
+        pass
 
     @abstractmethod
     def initialize(self) -> ComponentOutputs:
@@ -12,7 +16,7 @@ class ComponentBase(ABC):
         pass
 
     @abstractmethod
-    def advance(self, input: dict[str, float], dt_seconds) -> ComponentOutputs:
+    def advance(self, action: dict[str, float], state: SimulationState, dt_seconds: int) -> ComponentOutputs:
         """Update the component state for the given timestep."""
         pass
 

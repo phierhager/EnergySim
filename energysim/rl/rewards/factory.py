@@ -10,7 +10,7 @@ from energysim.rl.rewards.layers import (
     GridStabilityRewardLayer,
 )
 from energysim.rl.rewards.manager import RewardManager
-from energysim.rl.rewards.reward_config import RewardConfig
+from energysim.rl.rewards.reward_config import EconomicConfig, RewardConfig
 
 
 class RewardManagerFactory:
@@ -20,7 +20,7 @@ class RewardManagerFactory:
 
     @classmethod
     def create(
-        cls, config: RewardConfig, name: str = "BuildingEnvRewards"
+        cls, config: RewardConfig, economic_config: EconomicConfig, name: str = "BuildingEnvRewards"
     ) -> RewardManager:
         """
         Create a RewardManager configured according to the given RewardConfig.
@@ -36,7 +36,7 @@ class RewardManagerFactory:
 
         # Energy layer
         if config.energy_weight > 0:
-            energy_layer = EnergyRewardLayer(weight=config.energy_weight, enabled=True)
+            energy_layer = EnergyRewardLayer(weight=config.energy_weight, economic_config=economic_config, enabled=True)
             manager.add_layer(energy_layer, "energy")
             cls.logger.info(f"Added energy layer with weight {config.energy_weight}")
 

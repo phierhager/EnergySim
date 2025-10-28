@@ -2,7 +2,7 @@ import numpy as np
 from energysim.core.data.sources.base import DataRequest, DataSource
 from energysim.core.data.sources.factory import DataSourceFactory
 from dataclasses import dataclass
-from energysim.core.data.data_bundle import DataBundle
+from energysim.core.timestep_data import TimestepData
 from energysim.core.data.config import EnergyDatasetConfig, EnergyDatasetParams
 from energysim.core.data.transforms import get_time_features
 
@@ -17,7 +17,7 @@ class EnergyDataset:
             self.start, self.end - horizon_seconds, self.params.dt_seconds
         )
 
-    def __getitem__(self, idx: int) -> DataBundle:
+    def __getitem__(self, idx: int) -> TimestepData:
         timestamp = self.timestamps[idx]
         return self._get_data_bundle(timestamp)
 
@@ -28,7 +28,7 @@ class EnergyDataset:
         for t in self.timestamps:
             yield self._get_data_bundle(t)
 
-    def _get_data_bundle(self, timestamp: int) -> DataBundle:
+    def _get_data_bundle(self, timestamp: int) -> TimestepData:
         columns = tuple(self.params.feature_columns.values())
         request = DataRequest(
             timestamp=timestamp,
@@ -41,7 +41,7 @@ class EnergyDataset:
         }
         if self.params.use_time_features:
             features["time"] = get_time_features(timestamp)
-        return DataBundle(features=features, dt_seconds=self.params.dt_seconds)
+        return TimestepData(features=features, dt_seconds=self.params.dt_seconds, timestamp=timestamp)
 
     @property
     def num_timestamps(self) -> int:

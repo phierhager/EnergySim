@@ -1,4 +1,4 @@
-from energysim.core.components.shared.spaces import (
+from energysim.core.components.spaces import (
     Space,
     DiscreteSpace,
     ContinuousSpace,

@@ -2,6 +2,14 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class EconomicConfig:
+    """Immutable configuration for economic calculations."""
+    feed_in_tariff_eur_per_j: float = 1.0e-7
+    tax_rate: float = 0.19
+    demand_charge_threshold_j: float = 50.0
+    demand_charge_rate_eur_per_j: float = 0.1
+
+@dataclass(frozen=True)
 class RewardConfig:
     """Configuration for modular reward system layers - BEHAVIOR ONLY."""
 

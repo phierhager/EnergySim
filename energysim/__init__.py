@@ -1,8 +1,8 @@
-from energysim.rl.building_environment import BuildingEnvironment, EnvironmentConfig
-from energysim.rl.factory import EnvironmentFactory
+from energysim.rl.building_environment import BuildingEnvironment
+from energysim.rl.factory import EnvironmentFactory, EnvironmentConfig
 
 __all__ = [
  "BuildingEnvironment",
- "EnvironmentConfig",
  "EnvironmentFactory",
+ "EnvironmentConfig",
 ]

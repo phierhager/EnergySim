@@ -1,7 +1,8 @@
 from typing import ClassVar, Literal, TypeVar, Union, overload
-from energysim.core.components.local.shared.config import BaseLocalComponentConfig
+from energysim.core.components.config_base import BaseComponentConfig
 from dataclasses import dataclass, field
-from energysim.core.components.shared.spaces import (
+from energysim.core.components.sensors import ComponentSensorConfig
+from energysim.core.components.spaces import (
     ContinuousSpace,
     DiscreteSpace,
     Space,
@@ -71,8 +72,6 @@ class DegradingBatteryModelConfig:
 BatteryModelConfig = Union[SimpleBatteryModelConfig, DegradingBatteryModelConfig]
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BatteryComponentConfig(BaseLocalComponentConfig):
+class BatteryComponentConfig(BaseComponentConfig):
     model: BatteryModelConfig
-    # the sensor is inherited from BaseComponentConfig
-
     type: Literal["battery"] = "battery"
