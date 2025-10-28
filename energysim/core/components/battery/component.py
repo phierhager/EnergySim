@@ -2,7 +2,7 @@ from energysim.core.components.battery.model import (
     BatteryModelBase,
 )
 from energysim.core.components.base import ComponentBase
-from energysim.core.components.spaces import ContinuousSpace, Space
+from energysim.core.components.spaces import ContinuousSpace, DictSpace, Space
 from energysim.core.components.base import (
     ComponentBase,
     ComponentOutputs,
@@ -51,9 +51,11 @@ class Battery(ComponentBase):
         )
 
     @property
-    def action_space(self) -> dict[str, Space]:
-        return {
-            "normalized_power": ContinuousSpace(
-                lower_bound=-1.0, upper_bound=1.0
-            )
-        }
+    def action_space(self) -> DictSpace:
+        return DictSpace(
+            spaces={
+                "normalized_power": ContinuousSpace(
+                    lower_bound=-1.0, upper_bound=1.0
+                )
+            }
+        )

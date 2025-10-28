@@ -57,28 +57,6 @@ components:
       capacity: 15.0
       init_soc: 0.3
       deadband: 0.05
-
-  battery_3:
-    type: helics
-    sensor:
-      observe_electrical_soc: true
-      observe_thermal_soc: false
-      observe_electrical_flow: true
-      observe_heating_flow: false
-      observe_cooling_flow: false
-      soc_noise_std: 0.01
-      flow_noise_std: 0.1
-    action_space:
-      action:
-        type: discrete
-        n_actions: 5
-    connection:
-      federate_name: bems_battery_3
-      pub_topic: battery_3_control
-      sub_topic: battery_3_status
-      broker_address: 127.0.0.1
-      core_type: zmq
-
   
   battery_4:
     type: battery
@@ -119,24 +97,26 @@ thermal_model:
 dataset:
   data_source:
     type: file
-    file_path: dataset.csv
-    time_column: time
+    file_path: data/building_timeseries.csv
+    time_column: timestamp
   params:
     feature_columns: 
-      price: price_$
-      pv: pv_kW
-      load: load_kW
+      price: electricity_price
+      pv: pv_generation
+      load: base_load
+      ambient_temperature: ambient_temp
     dt_seconds: 900
     use_time_features: true
-
+  
 reward_manager:
-  rewards:
-    energy_cost:
-      weight: -1.0
-    comfort_violation:
-      weight: -10.0
-    battery_degradation:
-      weight: -0.1
+  energy_weight: 1.0
+  comfort_weight: 0.5
+
+economic:
+  feed_in_tariff_eur_per_j: 0.0000001
+  tax_rate: 0.19
+  demand_charge_threshold_j: 50.0
+  demand_charge_rate_eur_per_j: 0.1
       
 params:
   random_seed: 42
@@ -172,7 +152,7 @@ print("Environment created successfully.")
 environment.reset()
 print("Environment reset successfully.")
 
-for _ in range(5):
+for _ in range(50):
     structured_action = environment.action_space.sample()
     obs, reward, terminated, truncated, info = environment.step(structured_action)
     print(

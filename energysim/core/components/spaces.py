@@ -1,6 +1,34 @@
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Protocol, Union
+from abc import abstractmethod, ABC
+import numpy as np
 
+
+class Space(ABC):
+    type: ClassVar[Literal["discrete", "continuous"]]
+
+    @abstractmethod
+    def validate_action(self, action: Union[int, float]):
+        pass
+
+    @abstractmethod
+    def sample(self) -> Union[int, float]:
+        pass
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DictSpace:
+    spaces: dict[str, Space]
+
+    type: Literal["dict"] = "dict"
+
+    def validate_action(self, action: dict[str, Union[int, float]]):
+        for key, space in self.spaces.items():
+            if key not in action:
+                raise ValueError(f"Action missing key: {key}")
+            space.validate_action(action[key])
+
+    def sample(self) -> dict[str, Union[int, float]]:
+        return {key: space.sample() for key, space in self.spaces.items()}
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DiscreteSpace:
@@ -17,6 +45,9 @@ class DiscreteSpace:
             raise ValueError(
                 f"Action {action} out of bounds [0, {self.n_actions - 1}]."
             )
+        
+    def sample(self) -> int:
+        return np.random.randint(0, self.n_actions)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -37,6 +68,6 @@ class ContinuousSpace:
             raise ValueError(
                 f"Action {action} out of bounds [{self.lower_bound}, {self.upper_bound}]."
             )
-
-
-Space = Union[DiscreteSpace, ContinuousSpace]
+    
+    def sample(self) -> float:
+        return np.random.uniform(self.lower_bound, self.upper_bound)

@@ -5,6 +5,7 @@ import numpy as np
 
 from energysim.core.components.base import ComponentBase
 from energysim.core.components.outputs import ComponentOutputs, ElectricalEnergy
+from energysim.core.components.spaces import DictSpace, Space
 from energysim.core.thermal.state import ThermalState
 from energysim.core.thermal.thermal_model_base import ThermalModel
 from energysim.core.data.dataset import EnergyDataset
@@ -219,4 +220,18 @@ class BuildingSimulator:
             f"dataset_length={len(self.dataset)}, "
             f"current_step={self._timestep_index}, "
             f"is_done={self.is_done})>"
+        )
+
+    @property
+    def action_space(self) -> Space:
+        """
+        Returns the combined action space for all components in the simulator.
+        
+        The returned structure maps component names to their respective action spaces.
+        """
+        return DictSpace(
+            spaces={
+                name: component.action_space
+                for name, component in self.components.items()
+            }
         )
