@@ -231,13 +231,13 @@ class BuildingEnvironment(Env):
 
         # Add component observation spaces
         for sensor_name, sensor in self.comp_sensors.items():
-            spaces_dict[sensor_name] = get_gymnasium_space(sensor.observation_space())
+            spaces_dict[sensor_name] = get_gymnasium_space(sensor.observation_space)
 
         # Add thermal model observations
         if "thermal" in self.comp_sensors:
             raise ValueError("Thermal sensor must be provided separately.")
         spaces_dict["thermal"] = get_gymnasium_space(
-            self.thermal_sensor.observation_space()
+            self.thermal_sensor.observation_space
         )
 
         return spaces.Dict(spaces_dict)

@@ -17,6 +17,7 @@ class ActionDiscretizerWrapper(gym.ActionWrapper):
 
         # Build the new, discretized action space
         new_action_space = {}
+        assert isinstance(self.original_action_space, spaces.Dict), "Original action space must be a Dict."
         for comp_name, space in self.original_action_space.items():
             if comp_name in self.comp_to_num_bins:
                 n_bins = self.comp_to_num_bins[comp_name]

@@ -22,6 +22,6 @@ class ComponentBase(ABC):
 
     @property
     @abstractmethod
-    def action_space(self) -> dict[str, Space]:
+    def action_space(self) -> Space:
         """Return the action space of the component."""
         pass

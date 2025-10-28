@@ -6,6 +6,7 @@ import numpy as np
 from energysim.core.components.base import ComponentOutputs
 from energysim.core.thermal.thermal_model_base import ThermalState
 from energysim.core.components.spaces import (
+    DictSpace,
     Space,
     DiscreteSpace,
     ContinuousSpace,
@@ -23,8 +24,9 @@ class Sensor(ABC):
         """Return the current observation vector from this sensor."""
         pass
 
+    @property
     @abstractmethod
-    def observation_space(self) -> dict[str, Space]:
+    def observation_space(self) -> Space:
         """Return the observation space corresponding to this sensor."""
         pass
 
@@ -96,7 +98,8 @@ class ComponentSensor(Sensor):
 
         return obs
 
-    def observation_space(self) -> dict[str, Space]:
+    @property
+    def observation_space(self) -> DictSpace:
         observation_space = {}
         MAX_FLOW = 1e6
         if self.config.observe_electrical_soc:
@@ -120,7 +123,7 @@ class ComponentSensor(Sensor):
                 lower_bound=0.0, upper_bound=MAX_FLOW
             )  # example upper bound in Joules
 
-        return observation_space
+        return DictSpace(spaces=observation_space)
 
 
 # -------------------------------
@@ -156,9 +159,10 @@ class ThermalSensor(Sensor):
 
         return obs
 
+    @property
     def observation_space(
         self, thermal_state: Optional[ThermalState] = None
-    ) -> dict[str, Space]:
+    ) -> DictSpace:
         observation_space = {}
 
         if self.config.observe_indoor_temp:
@@ -183,4 +187,4 @@ class ThermalSensor(Sensor):
                     lower_bound=-50.0, upper_bound=50.0
                 )
 
-        return observation_space
+        return DictSpace(spaces=observation_space)
