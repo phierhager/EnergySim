@@ -2,15 +2,19 @@
 from dataclasses import dataclass
 from typing import Dict, Mapping, Optional, Any, Union, TypedDict
 import numpy as np
+import logging
 
 from energysim.core.components.base import ComponentBase
 from energysim.core.components.outputs import ComponentOutputs, ElectricalEnergy
-from energysim.core.components.sensors import Sensor
+from energysim.core.components.sensors import ComponentSensor, Sensor
 from energysim.core.components.spaces import DictSpace, Space
 from energysim.core.thermal.state import ThermalState
-from energysim.core.thermal.thermal_model_base import ThermalModel
+from energysim.core.thermal.base import ThermalModel
 from energysim.core.data.dataset import EnergyDataset
 from energysim.core.state import SimulationState
+from energysim.core.components.sensors import ComponentSensorConfig
+
+logger = logging.getLogger(__name__)
 
 class ObservationDict(TypedDict):
     thermal: dict[str, dict[str, float]]
@@ -49,7 +53,7 @@ class BuildingSimulator:
     A bare, decoupled building simulator.
     
     This class orchestrates the core simulation logic without any reference
-    to reinforcement learning, rewards, or observations. It is responsible for:
+    to reinforcement learning, objectives, or observations. It is responsible for:
     
     1.  Managing the simulation's internal state (time, thermal, components).
     2.  Stepping the simulation forward given a set of component actions.
@@ -75,6 +79,9 @@ class BuildingSimulator:
         self.thermal_model = thermal_model
         self.comp_sensors = comp_sensors
         self.thermal_sensor = thermal_sensor
+
+        # NOTE: External components will always be observed fully
+        self.external_sensor = ComponentSensor(ComponentSensorConfig(observe_cooling_flow=True, observe_heating_flow=True, observe_electrical_flow=True, observe_electrical_soc=True, observe_thermal_soc=True, soc_noise_std=0.0, flow_noise_std=0.0))
 
         # Internal state, managed by step() and reset()
         self._timestep_index: int = 0
@@ -131,7 +138,7 @@ class BuildingSimulator:
 
         return initial_result
 
-    def step(self, action: Dict[str, Dict[str, float]]) -> Optional[SimulationTimestepResult]:
+    def step(self, action: Dict[str, Dict[str, float]], external_component_outputs: Optional[Dict[str, ComponentOutputs]] = None) -> Optional[SimulationTimestepResult]:
         """
         Advances the simulation by one timestep based on the given action.
         
@@ -140,6 +147,8 @@ class BuildingSimulator:
         Args:
             action: A dictionary mapping component names to their specific
                     action dictionaries (e.g., {"battery": {"normalized_power": -0.5}}).
+            external_component_outputs: A dictionary of external endogenous component outputs
+                                        that should be included in the system balance.
                     
         Returns:
             Optional[SimulationTimestepResult]:
@@ -150,6 +159,14 @@ class BuildingSimulator:
             raise RuntimeError(
                 "Simulation is finished. Call reset() to start a new episode."
             )
+        
+        if external_component_outputs is not None:
+            for k, v in external_component_outputs.items():
+                if not isinstance(v, ComponentOutputs):
+                    raise ValueError(
+                        f"External component output for '{k}' is not a ComponentOutputs instance."
+                    )
+            logger.warning("MPC formulations should not be used with external component outputs.")
 
         # --- PHASE 0: Time Advancement & Termination Check ---
         # This logic follows the BuildingEnvironment, where step(action_t)
@@ -179,6 +196,13 @@ class BuildingSimulator:
                 state=current_state,
                 dt_seconds=dt_seconds
             )
+        # Include any external endogenous component outputs
+        if external_component_outputs is not None:
+            for k, v in external_component_outputs.items():
+                endogenous_outputs[f"external_{k}"] = v
+            for k in external_component_outputs.keys():
+                if f"external_{k}" not in self.comp_sensors:
+                    self.comp_sensors[f"external_{k}"] = self.external_sensor
 
         # --- PHASE 3: System Balancing & Finalization ---
         # Aggregate computed endogenous flows with given exogenous flows
