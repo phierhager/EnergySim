@@ -9,7 +9,7 @@ from energysim.core.components.outputs import ComponentOutputs, ElectricalEnergy
 from energysim.core.components.sensors import ComponentSensor, Sensor
 from energysim.core.components.spaces import DictSpace, Space
 from energysim.core.thermal.state import ThermalState
-from energysim.core.thermal.base import ThermalModel
+from energysim.core.thermal.models import ThermalModel
 from energysim.core.data.dataset import EnergyDataset
 from energysim.core.state import SimulationState
 from energysim.core.components.sensors import ComponentSensorConfig
