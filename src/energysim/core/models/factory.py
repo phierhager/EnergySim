@@ -8,7 +8,10 @@ from energysim.core.models.battery_model import (
     AbstractBatteryModel, SimpleBatteryModel, 
     DegradationBatteryModel, PassthroughBatteryModel
 )
-from energysim.core.models.thermal_model import ThermalModel
+from energysim.core.models.thermal_model import (
+    AbstractThermalModel, ThermalModel_1R1C, 
+    ThermalModel_2R2C, PassthroughThermalModel
+)
 from energysim.core.models.heat_pump_model import AbstractHeatPumpModel, PassthroughHeatPumpModel, RampingHeatPumpModel, StatelessHeatPumpModel
 from energysim.core.models.air_conditioner_model import AbstractAirConditionerModel, PassthroughAirConditionerModel, RampingAirConditionerModel, StatelessAirConditionerModel
 from energysim.core.models.thermal_storage_model import (
@@ -78,6 +81,17 @@ def create_storage(config: Optional[ThermalStorageConfig]) -> AbstractThermalSto
         # Use the PASSTHROUGH (bypass) model
         return ThermalStoragePassthrough(DUMMY_STORAGE_CONFIG)
 
-def create_thermal(config: ThermalConfig) -> ThermalModel:
-    # The room itself is not optional
-    return ThermalModel(config, initial_temp=20.0)
+def create_thermal(config: ThermalConfig) -> AbstractThermalModel:
+    """Factory function for thermal models."""
+    # The room itself is not optional, so we always get a config
+    
+    initial_temp = config.setpoint # Start at setpoint
+    
+    if config.model_type == "1R1C":
+        return ThermalModel_1R1C(config, initial_temp=initial_temp)
+    elif config.model_type == "2R2C":
+        return ThermalModel_2R2C(config, initial_temp=initial_temp)
+    elif config.model_type == "passthrough":
+        return PassthroughThermalModel(config, initial_temp=initial_temp)
+    else:
+        raise ValueError(f"Unknown thermal model_type: {config.model_type}")

@@ -8,7 +8,7 @@ import jaxopt
 
 # Import all the models AND the factory
 from ..core.models.battery_model import AbstractBatteryModel
-from ..core.models.thermal_model import ThermalModel
+from ..core.models.thermal_model import AbstractThermalModel
 from ..core.models.heat_pump_model import AbstractHeatPumpModel
 from ..core.models.air_conditioner_model import AbstractAirConditionerModel
 from ..core.models.thermal_storage_model import AbstractThermalStorage
@@ -49,7 +49,7 @@ class JAX_MPC_Solver:
         # The MPC solver *has its own instances* of the models.
         # This is crucial, as they must be JIT-compatible.
         self.battery: AbstractBatteryModel = create_battery(b_config)
-        self.thermal: ThermalModel = create_thermal(t_config)
+        self.thermal: AbstractThermalModel = create_thermal(t_config)
         self.heat_pump: AbstractHeatPumpModel = create_heat_pump(hp_config)
         self.ac: AbstractAirConditionerModel = create_ac(ac_config)
         self.storage: AbstractThermalStorage = create_storage(ts_config)
@@ -77,8 +77,8 @@ class JAX_MPC_Solver:
                 self.battery, 
                 (state_k.battery.soc, state_k.battery.soh)
             )
-            thermal_k: ThermalModel = eqx.tree_at(
-                lambda m: m.room_temp, self.thermal, state_k.thermal.room_temp
+            thermal_k: AbstractThermalModel = eqx.tree_at(
+                lambda m: (m.room_temp, m.wall_temp), self.thermal, (state_k.thermal.room_temp, state_k.thermal.wall_temp)
             )
             storage_k: AbstractThermalStorage = eqx.tree_at(
                 lambda m: m.soc, self.storage, state_k.storage.soc
@@ -120,7 +120,7 @@ class JAX_MPC_Solver:
             # --- D. Create next state (data-only) ---
             # Must pack ALL new states
             state_k_plus_1 = SystemState(
-                thermal=ThermalState(room_temp=next_thermal.room_temp),
+                thermal=ThermalState(room_temp=next_thermal.room_temp, wall_temp=next_thermal.wall_temp),
                 battery=BatteryState(soc=next_battery.soc, soh=next_battery.soh),
                 storage=ThermalStorageState(soc=next_storage.soc),
                 heat_pump=HeatPumpState(current_electrical_w=next_hp.current_electrical_w),

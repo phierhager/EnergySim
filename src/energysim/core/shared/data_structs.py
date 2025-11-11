@@ -13,12 +13,29 @@ Array = jnp.ndarray
 @dataclass(frozen=True)
 class ThermalConfig:
     """Parameters for the thermal model."""
-    building_volume: float = 200.0   # m³
-    air_density: float = 1.2         # kg/m³
-    specific_heat_air: float = 1005.0 # J/kg·K
-    heat_transfer_coeff: float = 100.0 # W/K (U-value * Area)
+    # --- Model Selection ---
+    model_type: Literal["1R1C", "2R2C", "passthrough"] = "1R1C"
+
+    # --- Shared Parameters ---
     setpoint: float = 21.0           # °C
     comfort_band: float = 1.0        # °C
+    
+    # --- 1R1C Model Parameters (Existing) ---
+    air_volume_m3: float = 200.0         # m³ (Renamed from building_volume)
+    air_density_kg_m3: float = 1.2       # kg/m³
+    air_specific_heat_j_kgk: float = 1005.0 # J/kg·K
+    air_to_ambient_coeff_w_k: float = 100.0 # W/K (U-value * Area) (Renamed from heat_transfer_coeff)
+
+    # --- 2R2C Model Parameters (New) ---
+    # Note: 2R2C also uses air_volume_m3, air_density_kg_m3, air_specific_heat_j_kgk
+    wall_capacity_j_k: float = 5.0e6      # J/K (Thermal mass of walls)
+    wall_to_ambient_r_k_w: float = 0.01   # K/W (Resistance from wall to ambient)
+    air_to_wall_r_k_w: float = 0.001      # K/W (Resistance from internal air to wall)
+    
+    @property
+    def air_capacity_j_k(self) -> float:
+        """Thermal capacity of the internal air mass."""
+        return self.air_volume_m3 * self.air_density_kg_m3 * self.air_specific_heat_j_kgk
 
 @dataclass(frozen=True)
 class BatteryConfig:
@@ -99,6 +116,7 @@ class ThermalStorageConfig:
 class ThermalState:
     """State of the thermal model."""
     room_temp: Array  # °C
+    wall_temp: Array  # °C
 
 @flax_dataclass
 class BatteryState:

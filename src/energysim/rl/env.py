@@ -42,7 +42,6 @@ class EnergySimEnv(gym.Env):
         self._build_spaces() 
 
     def _build_spaces(self):
-        # (Copied from previous answer - no changes)
         self.action_map: Dict[str, int] = {}
         action_lows: List[float] = []
         action_highs: List[float] = []
@@ -80,32 +79,50 @@ class EnergySimEnv(gym.Env):
         obs_highs: List[float] = []
         idx_o = 0
         
-        # Core states
+        # Core thermal states
         self.obs_map["room_temp"] = idx_o
-        obs_lows.append(-np.inf); obs_highs.append(np.inf); idx_o += 1
+        obs_lows.append(-np.inf)
+        obs_highs.append(np.inf)
+        idx_o += 1
+        
+        # ADD wall_temp if using a model that has it (we'll just add it always)
+        self.obs_map["wall_temp"] = idx_o 
+        obs_lows.append(-np.inf)
+        obs_highs.append(np.inf)
+        idx_o += 1
         
         if self.simulator.active_configs["battery"]:
             self.obs_map["battery_soc"] = idx_o
-            obs_lows.append(0.0); obs_highs.append(1.0); idx_o += 1
+            obs_lows.append(0.0)
+            obs_highs.append(1.0)
+            idx_o += 1
         if self.simulator.active_configs["storage"]:
             self.obs_map["storage_soc"] = idx_o
-            obs_lows.append(0.0); obs_highs.append(1.0); idx_o += 1
-            
+            obs_lows.append(0.0)
+            obs_highs.append(1.0)
+            idx_o += 1
+
         # --- NEW Observations ---
         if self.simulator.active_configs["heat_pump"]:
             conf = self.simulator.initial_heat_pump.config
             self.obs_map["hp_current_w"] = idx_o
-            obs_lows.append(0.0); obs_highs.append(conf.max_electrical_power_w); idx_o += 1
+            obs_lows.append(0.0)
+            obs_highs.append(conf.max_electrical_power_w)
+            idx_o += 1
         if self.simulator.active_configs["ac"]:
             conf = self.simulator.initial_ac.config
             self.obs_map["ac_current_w"] = idx_o
-            obs_lows.append(0.0); obs_highs.append(conf.max_electrical_power_w); idx_o += 1
+            obs_lows.append(0.0)
+            obs_highs.append(conf.max_electrical_power_w)
+            idx_o += 1
 
         # Exogenous data
         exo_keys = ["ambient_temp", "load", "pv", "price"]
         for key in exo_keys:
             self.obs_map[key] = idx_o
-            obs_lows.append(-np.inf); obs_highs.append(np.inf); idx_o += 1
+            obs_lows.append(-np.inf)
+            obs_highs.append(np.inf)
+            idx_o += 1
             
         self.observation_space = spaces.Box(
             low=np.array(obs_lows, dtype=np.float32),
@@ -155,6 +172,8 @@ class EnergySimEnv(gym.Env):
         
         # Core states
         obs[self.obs_map["room_temp"]] = state.thermal.room_temp
+        obs[self.obs_map["wall_temp"]] = state.thermal.wall_temp
+        
         if "battery_soc" in self.obs_map:
             obs[self.obs_map["battery_soc"]] = state.battery.soc
         if "storage_soc" in self.obs_map:

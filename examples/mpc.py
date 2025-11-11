@@ -74,7 +74,7 @@ def run_mpc_example():
     
     # The MPC solver needs the *full* PyTree state
     initial_state = SystemState(
-        thermal=ThermalState(room_temp=jnp.array(19.0)), # Room is cold
+        thermal=ThermalState(room_temp=jnp.array(19.0), wall_temp=jnp.array(18.0)), # Room is cold
         battery=BatteryState(soc=jnp.array(0.2), soh=jnp.array(1.0)),       # Battery is low
         storage=ThermalStorageState(soc=jnp.array(0.1)), # Storage is low
         heat_pump=HeatPumpState(current_electrical_w=jnp.array(0.0)),

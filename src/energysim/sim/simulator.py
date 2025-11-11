@@ -9,7 +9,7 @@ from ..core.models.factory import (
     create_ac, create_storage
 )
 from ..core.models.battery_model import AbstractBatteryModel
-from ..core.models.thermal_model import ThermalModel
+from ..core.models.thermal_model import AbstractThermalModel
 # --- UPDATED IMPORTS ---
 from ..core.models.heat_pump_model import AbstractHeatPumpModel
 from ..core.models.air_conditioner_model import AbstractAirConditionerModel
@@ -51,7 +51,7 @@ class JAXSimulator:
 
         # --- Mutable State Variables ---
         self._battery: AbstractBatteryModel = self.initial_battery
-        self._thermal: ThermalModel = self.initial_thermal
+        self._thermal: AbstractThermalModel = self.initial_thermal
         self._heat_pump: AbstractHeatPumpModel = self.initial_heat_pump # <-- Type hint
         self._ac: AbstractAirConditionerModel = self.initial_ac       # <-- Type hint
         self._storage: AbstractThermalStorage = self.initial_storage
@@ -73,7 +73,7 @@ class JAXSimulator:
     def state(self) -> SystemState:
         # --- UPDATED to build full SystemState ---
         return SystemState(
-            thermal=ThermalState(room_temp=self._thermal.room_temp),
+            thermal=ThermalState(room_temp=self._thermal.room_temp, wall_temp=self._thermal.wall_temp),
             battery=BatteryState(soc=self._battery.soc, soh=self._battery.soh),
             storage=ThermalStorageState(soc=self._storage.soc),
             heat_pump=HeatPumpState(current_electrical_w=self._heat_pump.current_electrical_w),
