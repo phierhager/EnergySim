@@ -1,4 +1,4 @@
-from energysim.core.components.battery.models import (
+from energysim.core.components.battery.model import (
     BatteryModelBase,
 )
 from energysim.core.components.base import ComponentBase
