@@ -1,4 +1,4 @@
-from energysim.core.components.battery.model import (
+from energysim.core.components.battery.models import (
     BatteryModelBase,
 )
 from energysim.core.components.base import ComponentBase
@@ -11,8 +11,6 @@ from energysim.core.components.registry import register_component
 from energysim.core.components.battery.config import (
     BatteryComponentConfig,
 )
-
-from energysim.core.state import SimulationState
 
 
 @register_component(BatteryComponentConfig)
@@ -28,7 +26,7 @@ class Battery(ComponentBase):
         return ComponentOutputs(electrical_storage=self._model.storage)
 
     def advance(
-        self, action: dict[str, float], state: SimulationState, dt_seconds: float
+        self, action: dict[str, float], dt_seconds: int
     ) -> ComponentOutputs:
         if not self._initialized:
             raise RuntimeError("Battery must be initialized before advancing.")
@@ -57,3 +55,7 @@ class Battery(ComponentBase):
                 )
             }
         )
+    
+    @property
+    def model(self) -> BatteryModelBase:
+        return self._model
