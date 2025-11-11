@@ -1,0 +1,3558 @@
+/
+    __init__.py
+        from energysim.rl.building_environment import BuildingEnvironment
+        from energysim.rl.factory import EnvironmentFactory, EnvironmentConfig
+        
+        __all__ = [
+         "BuildingEnvironment",
+         "EnvironmentFactory",
+         "EnvironmentConfig",
+        ]
+__pycache__/
+core/
+    __init__.py
+    state.py
+        # energysim/core/state.py (NEW FILE)
+        
+        from dataclasses import dataclass, field
+        from typing import Dict
+        
+        from .thermal.state import ThermalState
+        from .components.outputs import ComponentOutputs
+        from .timestep_data import TimestepData
+        
+        @dataclass(frozen=True, slots=True)
+        class SimulationState:
+            """
+            The single source of truth for the simulation's state at the beginning of a timestep.
+        
+            This object is constructed by the simulation orchestrator (e.g., BuildingEnvironment)
+            and passed to all components and models during the 'advance' call.
+            """
+            # Dynamic, time-varying data from external sources
+            timestep_data: TimestepData
+        
+            # Internal state of the simulation from the *previous* step
+            thermal_state: ThermalState
+            component_outputs: Dict[str, ComponentOutputs] = field(default_factory=dict)
+    timestep_data.py
+        import numpy as np
+        from dataclasses import dataclass
+        
+        @dataclass(frozen=True, slots=True)
+        class TimestepData:
+            """
+            Holds all exogenous time-series data for a single point in time.
+        
+            This is the definitive data container that flows from the dataset
+            into the simulation state for each step.
+            """
+            timestamp: int
+            dt_seconds: int
+            features: dict[str, np.ndarray]
+        
+            def __getitem__(self, key: str) -> np.ndarray:
+                return self.features[key]
+        
+            def get(self, key: str, default: np.ndarray = np.array([0.0])) -> np.ndarray:
+                return self.features.get(key, default)
+    __pycache__/
+    data/
+        dataset.py
+            from energysim.core.data.sources.base import DataRequest, DataSource
+            from energysim.core.timestep_data import TimestepData
+            from energysim.core.data.config import EnergyDatasetParams
+            from energysim.core.data.transforms import get_time_features
+            
+            
+            class EnergyDataset:
+                def __init__(self, data_source: DataSource, params: EnergyDatasetParams):
+                    self.data_source = data_source
+                    self.params = params
+                    self.start, self.end = self.data_source.get_time_range()
+                    horizon_seconds = (self.params.prediction_horizon or 0) * self.params.dt_seconds
+                    self.timestamps = range(
+                        self.start, self.end - horizon_seconds, self.params.dt_seconds
+                    )
+            
+                def __getitem__(self, idx: int) -> TimestepData:
+                    timestamp = self.timestamps[idx]
+                    return self._get_data_bundle(timestamp)
+            
+                def __len__(self) -> int:
+                    return len(self.timestamps)
+            
+                def __iter__(self):
+                    for t in self.timestamps:
+                        yield self._get_data_bundle(t)
+            
+                def _get_data_bundle(self, timestamp: int) -> TimestepData:
+                    columns = tuple(self.params.feature_columns.values())
+                    request = DataRequest(
+                        timestamp=timestamp,
+                        columns=columns,
+                        prediction_horizon=self.params.prediction_horizon,
+                    )
+                    data = self.data_source.get_data(request)
+                    features = {
+                        name: data[col] for name, col in self.params.feature_columns.items()
+                    }
+                    if self.params.use_time_features:
+                        features["time"] = get_time_features(timestamp)
+                    return TimestepData(features=features, dt_seconds=self.params.dt_seconds, timestamp=timestamp)
+            
+                @property
+                def num_timestamps(self) -> int:
+                    return len(self.timestamps)
+            
+                @property
+                def num_features(self) -> int:
+                    """Return the total number of features per timestamp."""
+                    sample_bundle = self[0]
+                    assert all(feat.ndim == 1 for feat in sample_bundle.features.values())
+                    return sum(feat.shape[0] for feat in sample_bundle.features.values())
+        factory.py
+            from energysim.core.data.sources.factory import DataSourceFactory
+            from energysim.core.data.config import EnergyDatasetConfig
+            from energysim.core.data.dataset import EnergyDataset
+            
+            
+            def build_dataset(config: EnergyDatasetConfig) -> EnergyDataset:
+                """Build an energy dataset from the given configuration."""
+                data_source = DataSourceFactory.create(config.data_source)
+                return EnergyDataset(data_source, config.params)
+        __init__.py
+        transforms.py
+            import time
+            
+            from energysim.core.utils.functions import cyclic_encode
+            import numpy as np
+            
+            
+            def get_time_features(timestamp: int) -> np.ndarray:
+                """
+                Add cyclic time features (hour of day, day of week, month of year)
+                encoded as sine and cosine to the sample dict.
+            
+                Parameters
+                ----------
+                timestamp : int
+                    UNIX timestamp.
+            
+                Returns
+                -------
+                dict
+                    The same dictionary, augmented with "time_features" as a float32 array.
+                """
+                dt = time.gmtime(timestamp)
+            
+                # Encode hour (0-23), day (0-6), month (0-11)
+                features = [
+                    *cyclic_encode(dt.tm_hour, 24),  # hour of day
+                    *cyclic_encode(dt.tm_wday, 7),  # day of week
+                    *cyclic_encode(dt.tm_mon - 1, 12),  # month of year (0-based)
+                ]
+            
+                return np.array(features, dtype=np.float32)
+        config.py
+            from dataclasses import dataclass
+            from typing import Optional
+            from energysim.core.data.sources.config import DataSourceConfig
+            
+            
+            @dataclass(frozen=True)
+            class EnergyDatasetParams:
+                """Configuration parameters for the DataProvider."""
+            
+                feature_columns: dict[str, str]  # e.g., {"price": "price_col", "pv": "pv_col"}
+                dt_seconds: int
+                use_time_features: bool
+                prediction_horizon: Optional[int] = None
+                """Prediction horizon in dt_seconds; None means no prediction requested."""
+            
+            
+            @dataclass(frozen=True)
+            class EnergyDatasetConfig:
+                data_source: DataSourceConfig
+                params: EnergyDatasetParams
+        __pycache__/
+        sources/
+            cached.py
+                """Composite data source implementations."""
+                
+                from dataclasses import dataclass
+                from typing import Dict, Tuple, Literal
+                import numpy as np
+                
+                from energysim.core.data.sources.base import (
+                    DataSource,
+                    DataRequest,
+                    BaseDataSourceConfig,
+                )
+                
+                
+                @dataclass(frozen=True, kw_only=True, slots=True)
+                class CachedDataSourceConfig(BaseDataSourceConfig):
+                    """Configuration for cached data sources."""
+                
+                    wrapped_source_config: BaseDataSourceConfig
+                    cache_size: int = 1000  # Maximum number of requests to cache
+                
+                    type: Literal["cached"] = "cached"
+                
+                
+                class CachedDataSource(DataSource):
+                    """Wrapper that adds caching to any data source."""
+                
+                    def __init__(self, source: DataSource, cache_size: int = 1000):
+                        super().__init__(source.dt_seconds)
+                        self.source = source
+                        self.cache_size = cache_size
+                        self._cache: Dict[DataRequest, Dict[str, np.ndarray]] = {}
+                
+                    def get_time_range(self) -> Tuple[int, int]:
+                        return self.source.get_time_range()
+                
+                    def get_available_columns(self) -> Tuple[str, ...]:
+                        return self.source.get_available_columns()
+                
+                    def get_data(self, request: DataRequest) -> Dict[str, np.ndarray]:
+                        if request in self._cache:
+                            return self._cache[request]
+                
+                        data = self.source.get_data(request)
+                
+                        # Simple LRU eviction
+                        if self.cache_size > 0:
+                            if len(self._cache) >= self.cache_size:
+                                oldest_key = next(iter(self._cache))
+                                del self._cache[oldest_key]
+                
+                            self._cache[request] = data
+                
+                        return data
+            file.py
+                """File-based data source implementation."""
+                
+                from dataclasses import dataclass
+                from typing import Tuple, Dict, Literal
+                import numpy as np
+                import pandas as pd
+                
+                from energysim.core.data.sources.base import (
+                    DataSource,
+                    DataRequest,
+                    BaseDataSourceConfig,
+                )
+                
+                
+                @dataclass(frozen=True, kw_only=True, slots=True)
+                class FileDataSourceConfig(BaseDataSourceConfig):
+                    """Configuration for file-based data sources."""
+                
+                    file_path: str
+                    time_column: str = "unixtime"
+                
+                    type: Literal["file"] = "file"
+                
+                
+                class FileDataSource(DataSource):
+                    """Data source that reads from CSV or Feather files."""
+                
+                    def __init__(self, config: FileDataSourceConfig, dt_seconds: int = 900):
+                        super().__init__(dt_seconds)
+                        self.config = config
+                
+                        # Load CSV or Feather
+                        if config.file_path.endswith(".feather"):
+                            df = pd.read_feather(config.file_path)
+                        else:
+                            df = pd.read_csv(config.file_path)
+                
+                        if config.time_column not in df.columns:
+                            raise KeyError(f"Time column '{config.time_column}' not found in file")
+                
+                        # Use datetime index in seconds
+                        df.set_index(config.time_column, inplace=True, drop=False)
+                        df.index = pd.to_datetime(df.index, unit="s")
+                
+                        # Construct regular grid starting at min timestamp
+                        start = df.index.min()
+                        end = df.index.max()
+                        new_index = pd.date_range(start=start, end=end, freq=f"{self.dt_seconds}s")
+                
+                        # Reindex and interpolate linearly NOTE: INTERPOLATION!
+                        df = df.reindex(new_index).interpolate(method="linear")
+                
+                        # Convert index back to integer seconds since epoch
+                        df.index = df.index.astype("int64") // 10**9
+                        df.sort_index(inplace=True)
+                
+                        # Save
+                        self._df = df
+                        self._time_range: Tuple[int, int] = (
+                            int(df.index.min()),
+                            int(df.index.max()),
+                        )
+                        self._columns: Tuple[str, ...] = tuple(df.columns)
+                
+                    def get_time_range(self) -> Tuple[int, int]:
+                        return self._time_range
+                
+                    def get_available_columns(self) -> Tuple[str, ...]:
+                        return self._columns
+                
+                    def get_data(self, request: DataRequest) -> Dict[str, np.ndarray]:
+                        result: Dict[str, np.ndarray] = {}
+                
+                        if request.timestamp not in self._df.index:
+                            raise ValueError(f"Timestamp {request.timestamp} not found in data")
+                        if request.prediction_horizon is not None:
+                            horizon_end = (
+                                request.timestamp + request.prediction_horizon * self.dt_seconds
+                            )
+                            if horizon_end > self._df.index.max():
+                                raise ValueError(
+                                    "Insufficient data for prediction horizon "
+                                    f"at timestamp {request.timestamp}"
+                                )
+                
+                        for col in request.columns:
+                            if col not in self._df.columns:
+                                raise KeyError(f"Column '{col}' not found in data")
+                
+                            # Current value
+                            current_val = np.array(
+                                [self._df.at[request.timestamp, col]], dtype=np.float32
+                            )
+                
+                            # Future values if prediction horizon is specified
+                            if request.prediction_horizon is None:
+                                result[col] = current_val
+                                continue
+                
+                            future_vals = []
+                
+                            for i in range(request.prediction_horizon):
+                                ts = request.timestamp + (i + 1) * self.dt_seconds
+                                if ts in self._df.index:
+                                    future_vals.append(self._df.at[ts, col])
+                                else:
+                                    future_vals.append(current_val[0])  # pad with last known value
+                
+                            result[col] = np.concatenate(
+                                [current_val, np.array(future_vals, dtype=np.float32)]
+                            )
+                
+                        return result
+            base.py
+                """Base abstractions for data sources."""
+                
+                from abc import ABC, abstractmethod
+                from dataclasses import dataclass
+                from typing import Dict, Tuple
+                import numpy as np
+                
+                
+                @dataclass(frozen=True, kw_only=True, slots=True)
+                class BaseDataSourceConfig:
+                    """Base configuration for data sources."""
+                
+                    type: str
+                
+                
+                @dataclass(frozen=True)
+                class DataRequest:
+                    """Request for data at a specific time with optional prediction horizon."""
+                
+                    timestamp: int
+                    columns: Tuple[str, ...]
+                    prediction_horizon: int | None = None
+                    """Prediction horizon in dt_seconds; None means no prediction requested."""
+                
+                    def __post_init__(self):
+                        if self.prediction_horizon is not None and self.prediction_horizon <= 0:
+                            raise ValueError("Prediction horizon must be positive.")
+                
+                
+                class DataSource(ABC):
+                    """Abstract base class for data sources."""
+                
+                    def __init__(self, dt_seconds: int) -> None:
+                        self._dt_seconds = dt_seconds
+                
+                    @property
+                    def dt_seconds(self) -> int:
+                        return self._dt_seconds
+                
+                    @abstractmethod
+                    def get_data(self, request: DataRequest) -> Dict[str, np.ndarray]:
+                        """
+                        Get data for the given request.
+                
+                        Returns:
+                            A dictionary mapping column names to numpy arrays.
+                        """
+                        pass
+                
+                    @abstractmethod
+                    def get_time_range(self) -> Tuple[int, int]:
+                        """Get the available time range (min_time, max_time)."""
+                        pass
+                
+                    @abstractmethod
+                    def get_available_columns(self) -> Tuple[str, ...]:
+                        """Get the list of columns available from this data source."""
+                        pass
+                
+                    @property
+                    def columns(self) -> Tuple[str, ...]:
+                        """Pythonic alias for available columns."""
+                        return self.get_available_columns()
+            factory.py
+                
+                from energysim.core.data.sources.base import (
+                    DataSource,
+                    BaseDataSourceConfig,
+                )
+                from energysim.core.data.sources.file import FileDataSource, FileDataSourceConfig
+                from energysim.core.data.sources.cached import (
+                    CachedDataSource,
+                    CachedDataSourceConfig,
+                )
+                
+                
+                class DataSourceFactory:
+                    """Factory to create DataSource instances based on configuration."""
+                
+                    @staticmethod
+                    def create(config: BaseDataSourceConfig) -> DataSource:
+                        """Create a DataSource instance from a DataSourceConfig."""
+                        if not isinstance(config, BaseDataSourceConfig):
+                            raise ValueError("config must be an instance of DataSourceConfig")
+                        if isinstance(config, FileDataSourceConfig):
+                            return FileDataSource(config)
+                        elif isinstance(config, CachedDataSourceConfig):
+                            # Extract inner wrapped source config
+                            wrapped_conf: BaseDataSourceConfig = config.wrapped_source_config
+                            assert not isinstance(wrapped_conf, CachedDataSourceConfig), (
+                                "Nested CachedDataSourceConfig is not supported"
+                            )
+                            cache_size: int = config.cache_size
+                            source = DataSourceFactory.create(wrapped_conf)
+                            return CachedDataSource(source, cache_size=cache_size)
+                        else:
+                            raise ValueError(f"Unsupported DataSourceConfig type: {type(config)}")
+            __init__.py
+            config.py
+                from .cached import CachedDataSourceConfig
+                from .file import FileDataSourceConfig
+                
+                from typing import Union
+                
+                DataSourceConfig = Union[FileDataSourceConfig, CachedDataSourceConfig]
+            __pycache__/
+    utils/
+        __init__.py
+        converter.py
+            from dataclasses import is_dataclass, fields
+            from typing import Any
+            import numpy as np
+            
+            
+            def to_dict_filtered(obj, exclude=["type"], recursion=False):
+                """Convert a dataclass to a dictionary, excluding specified fields."""
+                if not is_dataclass(obj):
+                    raise ValueError("to_dict_filtered expects a dataclass instance")
+            
+                result = {}
+                for f in fields(obj):
+                    if f.name in exclude:
+                        continue  # skip excluded fields
+                    value = getattr(obj, f.name)
+                    # Optionally recurse for nested dataclasses:
+                    if is_dataclass(value) and recursion:
+                        value = to_dict_filtered(value)
+                    result[f.name] = value
+                return result
+            
+            
+            def numpy_to_python(data: Any) -> Any:
+                """
+                Recursively convert NumPy scalars and arrays to native Python types.
+                - np.generic -> int or float
+                - np.ndarray -> list (recursively converted)
+                """
+                if isinstance(data, np.generic):
+                    return data.item()  # np.int64, np.float64 → int, float
+                elif isinstance(data, np.ndarray):
+                    return data.tolist()  # recursively converts elements
+                elif isinstance(data, dict):
+                    return {k: numpy_to_python(v) for k, v in data.items()}
+                elif isinstance(data, list):
+                    return [numpy_to_python(x) for x in data]
+                else:
+                    return data
+        functions.py
+            import numpy as np
+            
+            
+            def cyclic_encode(value: float, max_val: int) -> tuple[float, float]:
+                """
+                Encode a cyclic feature (e.g., hour, day, month) into sine and cosine.
+            
+                Parameters
+                ----------
+                value : float
+                    The input value to encode (e.g., 12.5 for half past noon).
+                max_val : int
+                    The maximum value of the cycle (e.g., 24 for hours, 7 for days, 12 for months).
+            
+                Returns
+                -------
+                tuple[float, float]
+                    A tuple containing (sin(angle), cos(angle)), where angle = 2π * value / max_val.
+                """
+                angle = 2 * np.pi * float(value) / max_val
+                return np.sin(angle), np.cos(angle)
+        __pycache__/
+    thermal/
+        base.py
+            from abc import ABC, abstractmethod
+            from dataclasses import asdict
+            from typing import Any, Dict, Optional
+            from energysim.core.thermal.config import ThermalModelConfig
+            from energysim.core.thermal.state import ThermalState
+            
+            class ThermalModel(ABC):
+                """
+                Abstract base class for building thermal models.
+            
+                Thermal models simulate the thermal dynamics of buildings,
+                including heat transfer, thermal mass effects, and HVAC interactions.
+                """
+            
+                def __init__(self, config: ThermalModelConfig):
+                    """
+                    Initialize thermal model.
+            
+                    Args:
+                        config: Thermal model configuration
+                    """
+                    self.config = config
+            
+                    # Initialize thermal state
+                    self.state = ThermalState(
+                        temperature=config.initial_temperature,
+                        temperature_setpoint=config.temperature_setpoint,
+                    )
+            
+                @abstractmethod
+                def advance(self, thermal_energy_j: float, ambient_temperature: float, dt_seconds: float) -> ThermalState:
+                    """
+                    Advance thermal model by one time step.
+            
+                    Args:
+                        thermal_energy_j: Net thermal energy input (positive = heating, negative = cooling)
+            
+                    Returns:
+                        Updated thermal state
+                    """
+                    pass
+            
+                @abstractmethod
+                def initialize(self) -> ThermalState:
+                    """
+                    Reset thermal model to initial state.
+            
+                    Returns:
+                        Initial thermal state
+                    """
+                    pass
+            
+                def get_thermal_demand(self, target_temperature: Optional[float] = None) -> float:
+                    """
+                    Calculate thermal energy demand to reach target temperature.
+            
+                    Args:
+                        target_temperature: Target temperature (uses setpoint if None)
+            
+                    Returns:
+                        Required thermal energy in joules (positive = heating, negative = cooling)
+                    """
+                    target = target_temperature or self.state.temperature_setpoint
+                    temp_diff = target - self.state.temperature
+            
+                    # Simple approximation - actual implementation depends on thermal model
+                    # This is a basic estimate, specific models should override
+                    thermal_capacity = (
+                        self.config.building_volume
+                        * self.config.air_density
+                        * self.config.specific_heat_air
+                    )
+                    return temp_diff * thermal_capacity
+            
+                def get_observations(self) -> Dict[str, Any]:
+                    """Get thermal state as dictionary for observations."""
+                    return {
+                        "temperature": self.state.temperature,
+                        "temperature_setpoint": self.state.temperature_setpoint,
+                        "temperature_error": self.state.temperature_error,
+                        "heating_demand": self.state.heating_demand,
+                        "cooling_demand": self.state.cooling_demand,
+                    }
+            
+                def get_state_dict(self) -> Dict[str, float]:
+                    """Get thermal state as dictionary for internal use."""
+                    return asdict(self.state)
+        factory.py
+            from energysim.core.thermal.base import (
+                ThermalModel,
+                ThermalModelConfig,
+            )
+            from energysim.core.thermal.registry import registry
+            
+            
+            def build_thermal_model(config: ThermalModelConfig) -> ThermalModel:
+                model_cls = registry[config.__class__.__name__]
+                return model_cls(config)
+        __init__.py
+            from energysim.core.thermal.config import (
+                ThermalModelConfig,
+            )
+            from energysim.core.thermal.state import (
+                ThermalState,
+            )
+            from energysim.core.thermal.models import * # noqa: F403, F401 # register all models
+            
+            __all__ = [
+                "ThermalModelConfig",
+                "ThermalState",
+            ]
+        registry.py
+            registry = {}
+            
+            
+            def register(config_cls):
+                def decorator(cls):
+                    registry[config_cls.__name__] = cls
+                    return cls
+            
+                return decorator
+        models.py
+            from energysim.core.thermal.base import (
+                ThermalModel,
+                ThermalState,
+            )
+            from energysim.core.thermal.config import SimpleAirModelConfig
+            from energysim.core.thermal.registry import register
+            
+            
+            @register(SimpleAirModelConfig)
+            class SimpleAirModel(ThermalModel):
+                """
+                Simple air thermal model with no thermal mass.
+            
+                This model treats the building as a single air volume with
+                instantaneous temperature response to thermal inputs.
+                """
+            
+                def __init__(self, config: SimpleAirModelConfig):
+                    super().__init__(config)
+            
+                    # Calculate thermal properties
+                    self.air_mass = config.building_volume * config.air_density  # kg
+                    self.thermal_capacity = self.air_mass * config.specific_heat_air  # J/°C
+            
+                def advance(self, thermal_energy_j: float, ambient_temperature: float, dt_seconds: float) -> ThermalState:
+                    """
+                    Update temperature based on thermal energy input.
+            
+                    Uses the formula: ΔT = Q / (m × c)
+                    where Q is thermal energy, m is air mass, c is specific heat
+                    """
+                    # Calculate temperature change from thermal energy
+                    temp_change = thermal_energy_j / self.thermal_capacity
+            
+                    # Calculate heat loss to ambient (simple model)
+                    temp_diff_to_ambient = self.state.temperature - ambient_temperature
+            
+                    # Heat loss rate (W/°C) - simplified model
+                    heat_loss_rate = self.config.heat_transfer_coefficient
+                    heat_loss_j = heat_loss_rate * temp_diff_to_ambient * dt_seconds
+                    heat_loss_temp_change = -heat_loss_j / self.thermal_capacity
+            
+                    # Update temperature
+                    new_temperature = self.state.temperature + temp_change + heat_loss_temp_change
+            
+                    # Calculate heating/cooling demand to reach setpoint
+                    temp_error = self.state.temperature_setpoint - new_temperature
+                    heating_demand = max(0.0, temp_error * self.thermal_capacity)
+                    cooling_demand = max(0.0, -temp_error * self.thermal_capacity)
+            
+                    # Update state
+                    self.state = ThermalState(
+                        temperature=new_temperature,
+                        temperature_setpoint=self.state.temperature_setpoint,
+                        heating_demand=heating_demand,
+                        cooling_demand=cooling_demand,
+                    )
+            
+                    return self.state
+            
+                def initialize(self) -> ThermalState:
+                    """Reset to initial temperature."""
+                    self.state = ThermalState(
+                        temperature=self.config.initial_temperature,
+                        temperature_setpoint=self.config.temperature_setpoint,
+                    )
+                    return self.state
+        config.py
+            from dataclasses import dataclass
+            from typing import Union
+            
+            
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class SimpleAirModelConfig:
+                # Building parameters
+                building_volume: float = 200.0  # m³
+                initial_temperature: float = 20.0  # °C
+                temperature_setpoint: float = 21.0  # °C
+            
+                # Simple air model parameters
+                air_density: float = 1.2  # kg/m³
+                specific_heat_air: float = 1005.0  # J/kg·°C
+            
+                # Thermal mass model parameters (when implemented)
+                thermal_mass: float = 50000.0  # J/°C
+                heat_transfer_coefficient: float = 100.0  # W/°C
+            
+                # External conditions
+                ambient_temperature: float = 15.0  # °C
+            
+                # Model type
+                type: str = "simple_air"
+            
+                def __post_init__(self) -> None:
+                    """Validate thermal model configuration."""
+                    if self.building_volume <= 0:
+                        raise ValueError("building_volume must be positive")
+                    if self.air_density <= 0:
+                        raise ValueError("air_density must be positive")
+                    if self.specific_heat_air <= 0:
+                        raise ValueError("specific_heat_air must be positive")
+                    if self.thermal_mass <= 0:
+                        raise ValueError("thermal_mass must be positive")
+                    if self.heat_transfer_coefficient <= 0:
+                        raise ValueError("heat_transfer_coefficient must be positive")
+            
+                    if self.initial_temperature < -50 or self.initial_temperature > 50:
+                        raise ValueError(
+                            "initial_temperature should be reasonable for building environment"
+                        )
+            
+            
+            ThermalModelConfig = Union[SimpleAirModelConfig]
+        sensors.py
+            from dataclasses import dataclass
+            from abc import ABC, abstractmethod
+            from typing import Any, Optional, TypedDict
+            import numpy as np
+            from energysim.core.sensors import Sensor
+            from energysim.core.thermal.state import ThermalState
+            from energysim.core.shared.spaces import DictSpace, ContinuousSpace
+            
+            @dataclass
+            class ThermalSensorConfig:
+                observe_indoor_temp: bool = True
+                observe_temp_error: bool = False
+                observe_comfort_violation: bool = False
+                observe_zone_temps: bool = False
+                temp_noise_std: float = 0.0
+            
+            
+            # -------------------------------
+            # Thermal Sensor
+            # -------------------------------
+            class ThermalSensorOutputs(TypedDict):
+                temperature: Optional[float]
+                temperature_error: Optional[float]
+                comfort_violation: Optional[float]
+                zone_temperatures: Optional[dict[str, float]]
+            
+            class ThermalSensor(Sensor):
+                """Robust thermal sensor for single or multi-zone buildings."""
+            
+                def __init__(self, config: ThermalSensorConfig):
+                    self.config = config
+            
+                def read(self, thermal_state: ThermalState) -> dict:
+                    obs = {}
+            
+                    if self.config.observe_indoor_temp:
+                        obs["temperature"] = float(thermal_state.temperature + np.random.normal(
+                            0, self.config.temp_noise_std
+                        ))
+            
+                    if self.config.observe_temp_error:
+                        obs["temperature_error"] = float(thermal_state.temperature_error)
+            
+                    if self.config.observe_comfort_violation:
+                        obs["comfort_violation"] = float(thermal_state.comfort_violation)
+            
+                    if self.config.observe_zone_temps:
+                        if thermal_state.zone_temperatures is None:
+                            raise ValueError("Zone temperatures requested but not available.")
+                        for zone, temp in thermal_state.zone_temperatures.items():
+                            obs[f"temp_{zone}"] = float(temp + np.random.normal(
+                                0, self.config.temp_noise_std
+                            ))
+            
+                    return obs
+            
+                @property
+                def observation_space(
+                    self, thermal_state: Optional[ThermalState] = None
+                ) -> DictSpace:
+                    observation_space = {}
+            
+                    if self.config.observe_indoor_temp:
+                        observation_space["temperature"] = ContinuousSpace(
+                            lower_bound=-50.0, upper_bound=50.0
+                        )
+                    if self.config.observe_temp_error:
+                        observation_space["temperature_error"] = ContinuousSpace(
+                            lower_bound=0.0, upper_bound=50.0
+                        )
+                    if self.config.observe_comfort_violation:
+                        observation_space["comfort_violation"] = ContinuousSpace(
+                            lower_bound=0.0, upper_bound=1.0
+                        )
+                    if self.config.observe_zone_temps:
+                        if thermal_state is None or thermal_state.zone_temperatures is None:
+                            raise ValueError(
+                                "ThermalState must be provided to determine number of zones."
+                            )
+                        for zone, _ in thermal_state.zone_temperatures.items():
+                            observation_space[f"temp_{zone}"] = ContinuousSpace(
+                                lower_bound=-50.0, upper_bound=50.0
+                            )
+            
+                    return DictSpace(spaces=observation_space)
+        state.py
+            from dataclasses import dataclass
+            from typing import Dict, Optional
+            
+            
+            @dataclass(slots=True)
+            class ThermalState:
+                """Current thermal state of the building."""
+            
+                temperature: float  # °C
+                temperature_setpoint: float  # °C
+                heating_demand: float = 0.0  # J
+                cooling_demand: float = 0.0  # J
+            
+                # Optional extended state for advanced models
+                thermal_mass_temperature: Optional[float] = None  # °C
+                zone_temperatures: Optional[Dict[str, float]] = None  # °C per zone
+            
+                # TODO: For now, we ignore humidity control
+                humidity: float = 0  # %RH
+                humidity_setpoint: float = 0  # %RH
+            
+                @property
+                def humidity_error(self) -> float:
+                    """Humidity error from setpoint."""
+                    return abs(self.humidity - self.humidity_setpoint)
+            
+                @property
+                def temperature_error(self) -> float:
+                    """Temperature error from setpoint."""
+                    return abs(self.temperature - self.temperature_setpoint)
+            
+                @property
+                def comfort_violation(self) -> bool:
+                    """Whether temperature is significantly outside comfort range."""
+                    return self.temperature_error > 3.0  # More than 3°C is uncomfortable
+        __pycache__/
+    components/
+        base.py
+            from abc import ABC, abstractmethod
+            from typing import Optional
+            from energysim.core.components.outputs import ComponentOutputs
+            from energysim.core.shared.spaces import Space
+            from energysim.core.components.model_base import ModelBase
+            from energysim.core.state import SimulationState
+            
+            class ComponentBase(ABC):
+                """Abstract base class for all components in the BEMS simulation framework."""
+                @abstractmethod
+                def initialize(self) -> ComponentOutputs:
+                    """Reset the component state for the given timestep."""
+                    pass
+            
+                @property
+                @abstractmethod
+                def action_space(self) -> Space:
+                    """Return the action space of the component."""
+                    pass
+            
+                @property
+                @abstractmethod
+                def model(self) -> ModelBase:
+                    """Return the underlying model of the component."""
+                    pass
+            
+            class ActionDrivenComponent(ComponentBase):
+                """Base class for stateless components that do not maintain internal state."""
+            
+                @abstractmethod
+                def advance(self, action: dict[str, float], dt_seconds: int) -> ComponentOutputs:
+                    """Update the component state for the given timestep."""
+                    pass
+            
+            class StateAwareComponent(ComponentBase):
+                @abstractmethod
+                def advance(self, action: dict[str, float], state: SimulationState, dt_seconds: int) -> ComponentOutputs:
+                    pass
+        factory.py
+            from typing import Iterable
+            from energysim.core.components.registry import registry
+            from energysim.core.components.config_base import BaseComponentConfig
+            from energysim.core.components.base import ComponentBase
+            
+            
+            def build_component(config: BaseComponentConfig) -> ComponentBase:
+                """
+                Builds a component based on its configuration.
+            
+                This factory is now simplified and no longer distinguishes between 'local' and 'remote'.
+                It constructs a component and its internal model based on the registered types.
+                """
+                if config.__class__.__name__ not in registry.components:
+                    raise ValueError(f"Component config '{config.__class__.__name__}' not found in registry.")
+                if config.model.__class__.__name__ not in registry.models:
+                    raise ValueError(f"Model config '{config.model.__class__.__name__}' not found in registry.")
+            
+                component_cls = registry.components[config.__class__.__name__]
+                model_factory = registry.models[config.model.__class__.__name__]
+            
+                model = model_factory(config.model)
+                return component_cls(model=model)
+            
+            
+            def build_components(configs: Iterable[BaseComponentConfig]) -> Iterable[ComponentBase]:
+                """Builds a sequence of components from their configurations."""
+                return (build_component(config) for config in configs)
+        __init__.py
+            """Make sure all components are registered."""
+            
+            from energysim.core.components import *  # noqa: F403, F401
+        config_base.py
+            from dataclasses import dataclass
+            from energysim.core.components.sensors import ComponentSensorConfig
+            from typing import Any
+            
+            
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class BaseComponentConfig:
+                type: str
+                sensor: ComponentSensorConfig
+                model: Any
+        config_types.py
+            """Config definitions for components. This is necessary to make dacite able to infer the correct types."""
+            
+            from typing import Union
+            from energysim.core.components.battery.config import BatteryComponentConfig
+            
+            ComponentConfig = Union[BatteryComponentConfig]
+            """Union type for all component configurations."""
+        outputs.py
+            from dataclasses import dataclass, field
+            from typing import Optional
+            
+            
+            # ------------------------
+            # Energy Domains
+            # ------------------------
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class ElectricalEnergy:
+                demand_j: float = 0.0
+                generation_j: float = 0.0
+                losses_j: float = 0.0
+            
+                @property
+                def net(self) -> float:
+                    return self.demand_j - self.generation_j
+            
+                def __add__(self, other: "ElectricalEnergy") -> "ElectricalEnergy":
+                    return ElectricalEnergy(
+                        demand_j=self.demand_j + other.demand_j,
+                        generation_j=self.generation_j + other.generation_j,
+                        losses_j=self.losses_j + other.losses_j,
+                    )
+            
+            
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class ThermalEnergy:
+                heating_j: float = 0.0
+                cooling_j: float = 0.0
+            
+                @property
+                def net_heating(self) -> float:
+                    return self.heating_j
+            
+                @property
+                def net_cooling(self) -> float:
+                    return self.cooling_j
+            
+                def __add__(self, other: "ThermalEnergy") -> "ThermalEnergy":
+                    return ThermalEnergy(
+                        heating_j=self.heating_j + other.heating_j,
+                        cooling_j=self.cooling_j + other.cooling_j,
+                    )
+            
+            
+            # ------------------------
+            # Storage States
+            # ------------------------
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class ElectricalStorage:
+                capacity: float = 0.0
+                soc: float = 0.0  # 0..1
+            
+                def __post_init__(self):
+                    if not (0.0 <= self.soc <= 1.0):
+                        raise ValueError("State of Charge (soc) must be between 0 and 1.")
+                    if self.capacity < 0.0:
+                        raise ValueError("Capacity must be greater or equal than 0.")
+                    if self.capacity == 0.0 and self.soc != 0.0:
+                        raise ValueError("If capacity is 0, soc must also be 0.")
+            
+                def __add__(self, other: "ElectricalStorage") -> "ElectricalStorage":
+                    if (self.capacity + other.capacity) == 0:
+                        return ElectricalStorage(capacity=0.0, soc=0.0)
+                    return ElectricalStorage(
+                        capacity=self.capacity + other.capacity,
+                        soc=(self.soc * self.capacity + other.soc * other.capacity)
+                        / (self.capacity + other.capacity),
+                    )
+            
+            
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class ThermalStorage:
+                capacity: float = 0.0
+                soc: float = 0.0  # 0..1
+            
+                def __post_init__(self):
+                    if not (0.0 <= self.soc <= 1.0):
+                        raise ValueError("State of Charge (soc) must be between 0 and 1.")
+                    if self.capacity < 0.0:
+                        raise ValueError("Capacity must be greater or equal than 0.")
+                    if self.capacity == 0.0 and self.soc != 0.0:
+                        raise ValueError("If capacity is 0, soc must also be 0.")
+            
+                def __add__(self, other: "ThermalStorage") -> "ThermalStorage":
+                    if (self.capacity + other.capacity) == 0:
+                        return ThermalStorage(capacity=0.0, soc=0.0)
+                    return ThermalStorage(
+                        capacity=self.capacity + other.capacity,
+                        soc=(self.soc * self.capacity + other.soc * other.capacity)
+                        / (self.capacity + other.capacity)
+                        if (self.capacity + other.capacity) > 0
+                        else 0.0,
+                    )
+            
+            
+            # ------------------------
+            # Component Health / Limits
+            # ------------------------
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class ComponentStatus:
+                """
+                Generic component status for all HEMS components.
+                Can include operational health, degradation, or performance limits.
+                """
+            
+                cycle_count: Optional[int] = None  # For batteries, compressors
+                capacity_fade: Optional[float] = None  # Fraction of nominal capacity lost
+                efficiency: Optional[float] = None  # Current efficiency of the component
+                internal_resistance: Optional[float] = None  # Battery-specific, optional
+                operational_state: Optional[str] = None  # e.g., "idle", "charging", "heating"
+            
+            
+            # ------------------------
+            # Component Outputs
+            # ------------------------
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class ComponentOutputs:
+                """
+                Encapsulates outputs from any HEMS component.
+                """
+            
+                electrical_energy: ElectricalEnergy = field(default_factory=ElectricalEnergy)
+                thermal_energy: ThermalEnergy = field(default_factory=ThermalEnergy)
+                electrical_storage: ElectricalStorage = field(default_factory=ElectricalStorage)
+                thermal_storage: ThermalStorage = field(default_factory=ThermalStorage)
+                # TODO: Add status and metadata if needed
+                # status: Optional[ComponentStatus] = None
+                # metadata: Dict = field(default_factory=dict)
+            
+                def __add__(self, other: "ComponentOutputs") -> "ComponentOutputs":
+                    return ComponentOutputs(
+                        electrical_energy=self.electrical_energy + other.electrical_energy,
+                        thermal_energy=self.thermal_energy + other.thermal_energy,
+                        electrical_storage=self.electrical_storage + other.electrical_storage,
+                        thermal_storage=self.thermal_storage + other.thermal_storage,
+                    )
+        registry.py
+            from dataclasses import dataclass, field
+            
+            @dataclass
+            class Registry:
+                """A central registry for components and their underlying models."""
+                components: dict = field(default_factory=dict)
+                models: dict = field(default_factory=dict)
+            
+            registry = Registry()
+            
+            def register_component(config_cls):
+                """Decorator to register a component class with its config class."""
+                def decorator(cls):
+                    registry.components[config_cls.__name__] = cls
+                    return cls
+                return decorator
+            
+            def register_model(config_cls):
+                """Decorator to register a model class with its config class."""
+                def decorator(cls):
+                    registry.models[config_cls.__name__] = cls
+                    return cls
+                return decorator
+        model_base.py
+            from abc import ABC
+            
+            class ModelBase(ABC):
+                """
+                Abstract base class for all component models in the simulation framework.
+            
+                This class serves as a common 'marker' interface for all models,
+                formally establishing the architectural pattern that every Component
+                contains a Model.
+            
+                It does not enforce any specific abstract methods, because the fundamental
+                responsibilities of different models (e.g., energy storage, generation,
+                consumption) are too diverse to be captured in a single, universal contract.
+            
+                Specific model interfaces for families of models (e.g., IBatteryModel)
+                should inherit from this base class to signal their role in the system.
+                """
+                pass
+        sensors.py
+            from abc import ABC, abstractmethod
+            from dataclasses import dataclass
+            from typing import Any, Optional, TypedDict
+            import numpy as np
+            
+            from energysim.core.components.base import ComponentOutputs
+            from energysim.core.thermal.base import ThermalState
+            from energysim.core.shared.spaces import (
+                DictSpace,
+                ContinuousSpace,
+            )
+            from energysim.core.shared.sensors import Sensor
+            
+            # -------------------------------
+            # Sensor Configuration Data Classes
+            # -------------------------------
+            
+            @dataclass
+            class ComponentSensorConfig:
+                observe_electrical_soc: bool = False
+                observe_thermal_soc: bool = False
+                observe_electrical_flow: bool = False
+                observe_heating_flow: bool = False
+                observe_cooling_flow: bool = False
+                soc_noise_std: float = 0.0
+                flow_noise_std: float = 0.0
+            
+            
+            # -------------------------------
+            # Component Sensor
+            # -------------------------------
+            
+            @dataclass
+            class ComponentSensorOutputs(TypedDict):
+                electrical_soc: Optional[float]
+                thermal_soc: Optional[float]
+                electrical_flow: Optional[float]
+                heating_flow: Optional[float]
+                cooling_flow: Optional[float]
+            
+            
+            class ComponentSensor(Sensor):
+                """Sensor for observing component/battery outputs."""
+            
+                def __init__(self, config: ComponentSensorConfig):
+                    self.config = config
+            
+                def read(self, comp_out: ComponentOutputs) -> dict:
+                    obs = {}
+            
+                    # SOC observations
+                    if self.config.observe_electrical_soc:
+                        soc = comp_out.electrical_storage.soc
+                        soc += np.random.normal(0, self.config.soc_noise_std)
+                        obs["electrical_soc"] = float(np.clip(soc, 0.0, 1.0))
+            
+                    if self.config.observe_thermal_soc:
+                        soc = comp_out.thermal_storage.soc
+                        soc += np.random.normal(0, self.config.soc_noise_std)
+                        obs["thermal_soc"] = float(np.clip(soc, 0.0, 1.0))
+            
+                    # Energy flow observations
+                    if self.config.observe_electrical_flow:
+                        net_flow = (
+                            comp_out.electrical_energy.generation_j
+                            - comp_out.electrical_energy.demand_j
+                        )
+                        net_flow += np.random.normal(0, self.config.flow_noise_std)
+                        obs["electrical_flow"] = float(net_flow)
+            
+                    if self.config.observe_heating_flow:
+                        flow = comp_out.thermal_energy.heating_j
+                        flow += np.random.normal(0, self.config.flow_noise_std)
+                        obs["heating_flow"] = float(flow)
+            
+                    if self.config.observe_cooling_flow:
+                        flow = comp_out.thermal_energy.cooling_j
+                        flow += np.random.normal(0, self.config.flow_noise_std)
+                        obs["cooling_flow"] = float(flow)
+            
+                    return obs
+            
+                @property
+                def observation_space(self) -> DictSpace:
+                    observation_space = {}
+                    MAX_FLOW = 1e6
+                    if self.config.observe_electrical_soc:
+                        observation_space["electrical_soc"] = ContinuousSpace(
+                            lower_bound=0.0, upper_bound=1.0
+                        )
+                    if self.config.observe_thermal_soc:
+                        observation_space["thermal_soc"] = ContinuousSpace(
+                            lower_bound=0.0, upper_bound=1.0
+                        )
+                    if self.config.observe_electrical_flow:
+                        observation_space["electrical_flow"] = ContinuousSpace(
+                            lower_bound=-1e6, upper_bound=MAX_FLOW
+                        )  # example bounds in Joules
+                    if self.config.observe_heating_flow:
+                        observation_space["heating_flow"] = ContinuousSpace(
+                            lower_bound=0.0, upper_bound=MAX_FLOW
+                        )  # example upper bound in Joules
+                    if self.config.observe_cooling_flow:
+                        observation_space["cooling_flow"] = ContinuousSpace(
+                            lower_bound=0.0, upper_bound=MAX_FLOW
+                        )  # example upper bound in Joules
+            
+                    return DictSpace(spaces=observation_space)
+        __pycache__/
+        battery/
+            component.py
+                from energysim.core.components.battery.models import (
+                    BatteryModelBase,
+                )
+                from energysim.core.components.base import ActionDrivenComponent
+                from energysim.core.shared.spaces import ContinuousSpace, DictSpace
+                from energysim.core.components.base import (
+                    ComponentOutputs,
+                )
+                from energysim.core.components.outputs import ElectricalEnergy
+                from energysim.core.components.registry import register_component
+                from energysim.core.components.battery.config import (
+                    BatteryComponentConfig,
+                )
+                
+                
+                @register_component(BatteryComponentConfig)
+                class Battery(ActionDrivenComponent):
+                    def __init__(self, model: BatteryModelBase):
+                        self._model = model
+                        self._initialized = False
+                
+                    def initialize(self) -> ComponentOutputs:
+                        if self._initialized:
+                            raise RuntimeError("Battery already initialized.")
+                        self._initialized = True
+                        return ComponentOutputs(electrical_storage=self._model.storage)
+                
+                    def advance(
+                        self, action: dict[str, float], dt_seconds: int
+                    ) -> ComponentOutputs:
+                        if not self._initialized:
+                            raise RuntimeError("Battery must be initialized before advancing.")
+                
+                        if "normalized_power" not in action:
+                            raise ValueError("Input must contain 'normalized_power' key.")
+                
+                        normalized_power = action["normalized_power"] # in [-1, 1]
+                        power = normalized_power * self._model.max_power # in Watts
+                        energy_transfer = self._model.apply_power(power, dt_seconds)
+                
+                        return ComponentOutputs(
+                            electrical_storage=self._model.storage,
+                            electrical_energy=ElectricalEnergy(
+                                demand_j=max(0, energy_transfer),
+                                generation_j=max(0, -energy_transfer),
+                            ),
+                        )
+                
+                    @property
+                    def action_space(self) -> DictSpace:
+                        return DictSpace(
+                            spaces={
+                                "normalized_power": ContinuousSpace(
+                                    lower_bound=-1.0, upper_bound=1.0
+                                )
+                            }
+                        )
+                
+                    @property
+                    def model(self) -> BatteryModelBase:
+                        return self._model
+            __init__.py
+                """Battery component module."""
+                
+                from .component import Battery
+                
+                __all__ = ["Battery"]
+            models.py
+                
+                from energysim.core.components.battery.config import (
+                    DegradingBatteryModelConfig,
+                    SimpleBatteryModelConfig,
+                )
+                from energysim.core.components.model_base import ModelBase
+                from energysim.core.components.outputs import (
+                    ElectricalStorage,
+                )
+                from energysim.core.components.registry import register_model
+                from abc import abstractmethod
+                
+                from energysim.mpc.base import MPCFormulatable
+                from energysim.mpc.builder import MPCBuilder
+                import casadi as ca
+                
+                
+                class BatteryModelBase(ModelBase):
+                    @property
+                    @abstractmethod
+                    def max_power(self) -> float:
+                        pass
+                
+                    @property
+                    @abstractmethod
+                    def storage(self) -> ElectricalStorage:
+                        pass
+                
+                    @abstractmethod
+                    def apply_power(self, normalized_power: float, dt_seconds: float) -> float:
+                        """Applies requested power (positive=charge, negative=discharge)."""
+                        pass
+                
+                
+                @register_model(SimpleBatteryModelConfig)
+                class SimpleBatteryModel(BatteryModelBase, MPCFormulatable):
+                    def __init__(self, config: SimpleBatteryModelConfig):
+                        self._config = config
+                        self._storage = ElectricalStorage(capacity=config.capacity, soc=config.init_soc)
+                
+                    @property
+                    def max_power(self) -> float:
+                        return self._config.max_power
+                
+                    @property
+                    def storage(self) -> ElectricalStorage:
+                        return self._storage
+                
+                    def apply_power(self, normalized_power: float, dt_seconds: float) -> float:
+                        """Applies requested power (positive=charge, negative=discharge)."""
+                        if dt_seconds <= 0:
+                            raise ValueError("dt_seconds must be positive.")
+                
+                        requested_energy = abs(normalized_power) * dt_seconds
+                        is_charge = normalized_power > 0
+                        return self._perform_energy_transfer(requested_energy, is_charge)
+                
+                    def _perform_energy_transfer(
+                        self, requested_energy: float, is_charge: bool
+                    ) -> float:
+                        soc = self._storage.soc
+                        capacity = self._config.capacity
+                        eff = self._config.efficiency
+                        max_power_energy = min(requested_energy, self._config.max_power)
+                
+                        if is_charge:
+                            if soc >= 1.0:
+                                return 0.0
+                            available_capacity = (1.0 - soc) * capacity
+                            energy_to_store = min(max_power_energy * eff, available_capacity)
+                            self._storage = ElectricalStorage(
+                                soc=soc + energy_to_store / capacity, capacity=capacity
+                            )
+                            return energy_to_store / eff
+                        else:
+                            if soc <= 0.0:
+                                return 0.0
+                            energy_available = soc * capacity
+                            energy_to_release = min(max_power_energy / eff, energy_available)
+                            self._storage = ElectricalStorage(
+                                soc=soc - energy_to_release / capacity, capacity=capacity
+                            )
+                            return -energy_to_release * eff
+                
+                    def get_mpc_state_variables(self, builder: MPCBuilder) -> list[ca.SX]:
+                        # Define one state variable: state-of-charge (soc)
+                        soc = builder.opti.variable(1)
+                        builder.set_initial_state('battery_soc', soc) # Register it
+                        return [soc]
+                
+                    def get_mpc_action_variables(self, builder: MPCBuilder) -> list[ca.SX]:
+                        # Define one action variable: power (positive=charge, negative=discharge)
+                        p_bat = builder.opti.variable(1)
+                        return [p_bat]
+                
+                    def add_mpc_dynamics_constraints(
+                        self,
+                        builder: MPCBuilder,
+                        k: int,
+                        states: dict[str, ca.SX],
+                        actions: dict[str, ca.SX],
+                        exogenous: dict[str, ca.SX]
+                    ):
+                        # Get vars for this step (k) and next step (k+1)
+                        soc_k = states['battery_soc'][k]
+                        soc_k_plus_1 = states['battery_soc'][k+1]
+                        p_bat_k = actions['battery_power'][k] # Assumes builder renames this
+                
+                        dt = builder.dt_seconds
+                        eff = self._config.efficiency
+                        cap = self._config.capacity
+                
+                        # Symbolic representation of the charging/discharging logic
+                        # This is more complex than the simple equation.
+                        # We must use helper variables.
+                        energy_change = dt * p_bat_k
+                
+                        # We need to model one-way efficiency
+                        energy_stored = ca.if_else(energy_change > 0, energy_change * eff, energy_change / eff)
+                
+                        # The core dynamics equation
+                        builder.add_constraint(soc_k_plus_1 == soc_k + energy_stored / cap)
+                
+                    def add_mpc_operational_constraints(
+                        self,
+                        builder: MPCBuilder,
+                        k: int,
+                        states: dict[str, ca.SX],
+                        actions: dict[str, ca.SX],
+                        exogenous: dict[str, ca.SX]
+                    ):
+                        soc_k = states['battery_soc'][k]
+                        p_bat_k = actions['battery_power'][k]
+                
+                        # State constraints
+                        builder.add_constraint(soc_k >= 0.0)
+                        builder.add_constraint(soc_k <= 1.0)
+                
+                        # Action constraints
+                        builder.add_constraint(p_bat_k >= -self._config.max_power)
+                        builder.add_constraint(p_bat_k <= self._config.max_power)
+                
+                
+                @register_model(DegradingBatteryModelConfig)
+                class DegradingBatteryModel(BatteryModelBase):
+                    """Battery model with capacity degradation."""
+                
+                    def __init__(self, config: DegradingBatteryModelConfig):
+                        self._config = config
+                        self._initial_capacity = config.capacity
+                        self._storage = ElectricalStorage(capacity=config.capacity, soc=config.init_soc)
+                        self._throughput = 0.0  # cumulative charged + discharged energy
+                
+                    @property
+                    def max_power(self) -> float:
+                        return self._config.max_power
+                
+                    @property
+                    def storage(self) -> ElectricalStorage:
+                        return self._storage
+                
+                    def apply_power(self, normalized_power: float, dt_seconds: float) -> float:
+                        if dt_seconds <= 0:
+                            raise ValueError("dt_seconds must be positive.")
+                
+                        requested_energy = abs(normalized_power) * dt_seconds
+                        is_charge = normalized_power > 0
+                        transferred = self._perform_energy_transfer(requested_energy, is_charge)
+                        self._throughput += abs(transferred)
+                        self._apply_degradation()
+                        return transferred
+                
+                    def _perform_energy_transfer(
+                        self, requested_energy: float, is_charge: bool
+                    ) -> float:
+                        soc = self._storage.soc
+                        capacity = self._storage.capacity
+                        eff = self._config.efficiency
+                        max_power_energy = min(requested_energy, self._config.max_power)
+                
+                        if is_charge:
+                            if soc >= 1.0:
+                                return 0.0
+                            available_capacity = (1.0 - soc) * capacity
+                            energy_to_store = min(max_power_energy * eff, available_capacity)
+                            self._storage = ElectricalStorage(
+                                soc=soc + energy_to_store / capacity, capacity=capacity
+                            )
+                            return energy_to_store / eff
+                        else:
+                            if soc <= 0.0:
+                                return 0.0
+                            energy_available = soc * capacity
+                            energy_to_release = min(max_power_energy / eff, energy_available)
+                            self._storage = ElectricalStorage(
+                                soc=soc - energy_to_release / capacity, capacity=capacity
+                            )
+                            return -energy_to_release * eff
+                
+                    def _apply_degradation(self):
+                        """Apply degradation according to the configured mode."""
+                        rate = self._config.degradation_rate
+                        min_cap = self._initial_capacity * self._config.min_capacity_fraction
+                        capacity = self._initial_capacity
+                
+                        if self._config.degradation_mode == "linear":
+                            degraded_capacity = capacity - rate * self._throughput
+                
+                        elif self._config.degradation_mode == "exponential":
+                            degraded_capacity = capacity * (1.0 - rate) ** self._throughput
+                
+                        elif self._config.degradation_mode == "polynomial":
+                            exponent = self._config.poly_exponent
+                            degraded_capacity = capacity - rate * (self._throughput**exponent)
+                
+                        else:
+                            raise ValueError(
+                                f"Unknown degradation mode: {self._config.degradation_mode}"
+                            )
+                
+                        degraded_capacity = max(min_cap, degraded_capacity)
+                        self._storage = ElectricalStorage(
+                            soc=self._storage.soc, capacity=degraded_capacity
+                        )
+            config.py
+                from typing import Literal, Union
+                from energysim.core.components.config_base import BaseComponentConfig
+                from dataclasses import dataclass
+                
+                
+                @dataclass(frozen=True, slots=True, kw_only=True)
+                class SimpleBatteryModelConfig:
+                    """Simple battery configuration."""
+                
+                    efficiency: float = 1.0
+                    max_power: float = 1.0
+                    capacity: float = 1.0
+                    init_soc: float = 0.0
+                    deadband: float = 0.0
+                
+                    type: Literal["simple"] = "simple"
+                
+                    def __post_init__(self):
+                        if not (0 < self.efficiency <= 1):
+                            raise ValueError("Efficiency must be between 0 and 1.")
+                        if not (0 <= self.init_soc <= 1):
+                            raise ValueError("Initial SoC must be between 0 and 1.")
+                        if self.max_power <= 0 or self.capacity <= 0:
+                            raise ValueError("Max power and capacity must be positive.")
+                        if self.deadband < 0:
+                            raise ValueError("Deadband must be non-negative.")
+                
+                
+                @dataclass(frozen=True, slots=True, kw_only=True)
+                class DegradingBatteryModelConfig:
+                    """Battery configuration with capacity degradation."""
+                
+                    efficiency: float = 1.0
+                    max_power: float = 1.0
+                    capacity: float = 1.0
+                    init_soc: float = 0.0
+                    deadband: float = 0.0
+                
+                    # degradation settings
+                    degradation_mode: Literal["linear", "exponential", "polynomial"] = "linear"
+                    degradation_rate: float = 0.001  # per unit throughput or cycle
+                    min_capacity_fraction: float = (
+                        0.5  # cannot degrade below this fraction of initial capacity
+                    )
+                    poly_exponent: float = 2.0  # used if degradation_mode = "polynomial"
+                
+                    type: Literal["degrading"] = "degrading"
+                
+                    def __post_init__(self):
+                        if not (0 < self.efficiency <= 1):
+                            raise ValueError("Efficiency must be between 0 and 1.")
+                        if not (0 <= self.init_soc <= 1):
+                            raise ValueError("Initial SoC must be between 0 and 1.")
+                        if self.max_power <= 0 or self.capacity <= 0:
+                            raise ValueError("Max power and capacity must be positive.")
+                        if self.deadband < 0:
+                            raise ValueError("Deadband must be non-negative.")
+                        if not (0 < self.min_capacity_fraction <= 1):
+                            raise ValueError("min_capacity_fraction must be between 0 and 1.")
+                        if self.degradation_rate < 0:
+                            raise ValueError("Degradation rate must be non-negative.")
+                        if self.degradation_mode == "polynomial" and self.poly_exponent <= 0:
+                            raise ValueError("Polynomial exponent must be positive.")
+                
+                
+                BatteryModelConfig = Union[SimpleBatteryModelConfig, DegradingBatteryModelConfig]
+                
+                @dataclass(frozen=True, slots=True, kw_only=True)
+                class BatteryComponentConfig(BaseComponentConfig):
+                    model: BatteryModelConfig
+                    type: Literal["battery"] = "battery"
+            __pycache__/
+    shared/
+        mpc_interface.py
+            # in energysim/core/interfaces/mpc_interface.py
+            from abc import ABC, abstractmethod
+            import casadi as ca
+            
+            class MPCInterface(ABC):
+                @property
+                @abstractmethod
+                def opti(self): ...
+            
+                @property
+                @abstractmethod
+                def dt_seconds(self) -> float: ...
+            
+                @abstractmethod
+                def add_constraint(self, expr): ...
+            
+                @abstractmethod
+                def set_initial_state(self, name: str, var: ca.SX): ...
+        __init__.py
+        spaces.py
+            from dataclasses import dataclass
+            from typing import ClassVar, Literal, Union
+            from abc import abstractmethod, ABC
+            import numpy as np
+            
+            
+            class Space(ABC):
+                type: ClassVar[Literal["discrete", "continuous"]]
+            
+                @abstractmethod
+                def validate_action(self, action: Union[int, float]):
+                    pass
+            
+                @abstractmethod
+                def sample(self) -> Union[int, float]:
+                    pass
+            
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class DictSpace:
+                spaces: dict[str, Space]
+            
+                type: Literal["dict"] = "dict"
+            
+                def validate_action(self, action: dict[str, Union[int, float]]):
+                    for key, space in self.spaces.items():
+                        if key not in action:
+                            raise ValueError(f"Action missing key: {key}")
+                        space.validate_action(action[key])
+            
+                def sample(self) -> dict[str, Union[int, float]]:
+                    return {key: space.sample() for key, space in self.spaces.items()}
+            
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class DiscreteSpace:
+                n_actions: int
+            
+                type: Literal["discrete"] = "discrete"
+            
+                def __post_init__(self):
+                    if self.n_actions <= 1:
+                        raise ValueError("n_actions must be greater than 1 for discrete control.")
+            
+                def validate_action(self, action: int):
+                    if not (0 <= action < self.n_actions):
+                        raise ValueError(
+                            f"Action {action} out of bounds [0, {self.n_actions - 1}]."
+                        )
+            
+                def sample(self) -> int:
+                    return np.random.randint(0, self.n_actions)
+            
+            
+            @dataclass(frozen=True, slots=True, kw_only=True)
+            class ContinuousSpace:
+                lower_bound: float
+                upper_bound: float
+            
+                type: Literal["continuous"] = "continuous"
+            
+                def __post_init__(self):
+                    if self.lower_bound >= self.upper_bound:
+                        raise ValueError(
+                            "lower_bound must be less than upper_bound for continuous control."
+                        )
+            
+                def validate_action(self, action: float):
+                    if not (self.lower_bound <= action <= self.upper_bound):
+                        raise ValueError(
+                            f"Action {action} out of bounds [{self.lower_bound}, {self.upper_bound}]."
+                        )
+            
+                def sample(self) -> float:
+                    return np.random.uniform(self.lower_bound, self.upper_bound)
+        sensors.py
+            # -------------------------------
+            # Abstract Sensor Interface
+            # -------------------------------
+            from abc import ABC, abstractmethod
+            from typing import Any
+            from energysim.core.shared.spaces import Space
+            
+            class Sensor(ABC):
+                """Abstract interface for all sensors."""
+            
+                @abstractmethod
+                def read(self, *args: Any) -> dict:
+                    """Return the current observation vector from this sensor."""
+                    pass
+            
+                @property
+                @abstractmethod
+                def observation_space(self) -> Space:
+                    """Return the observation space corresponding to this sensor."""
+                    pass
+        __pycache__/
+rl/
+    factory.py
+        from typing import Dict
+        from dataclasses import dataclass
+        
+        from energysim.core.thermal.base import (
+            ThermalModelConfig,
+        )
+        from energysim.rl.building_environment import (
+            EnvironmentParameters,
+        )
+        from energysim.reward.factory import RewardManagerFactory
+        from energysim.rl.building_environment import (
+            BuildingEnvironment,
+        )
+        from energysim.core.components.sensors import (
+            ThermalSensor,
+            ThermalSensorConfig,
+            ComponentSensor,
+        )
+        from energysim.core.data.config import EnergyDatasetConfig
+        from energysim.reward.config import EconomicConfig, RewardConfig
+        from energysim.core.components.config_types import ComponentConfig
+        from energysim.core.components.factory import build_component
+        from energysim.core.thermal.factory import build_thermal_model
+        from energysim.core.data.factory import build_dataset
+        
+        from energysim.rl.wrappers.action_discretizer import ActionDiscretizerWrapper
+        from energysim.rl.wrappers.action_flattener import ActionFlattenerWrapper
+        
+        
+        import gymnasium as gym
+        import numpy as np
+        
+        @dataclass
+        class EnvironmentConfig:
+            components: Dict[str, ComponentConfig]
+            thermal_sensor: ThermalSensorConfig
+            thermal_model: ThermalModelConfig
+            dataset: EnergyDatasetConfig
+            reward_manager: RewardConfig
+            economic: EconomicConfig
+            params: EnvironmentParameters
+            wrappers: dict = None  # Optional wrappers to apply
+        
+        
+        class EnvironmentFactory:
+            @staticmethod
+            def create_environment(config: EnvironmentConfig) -> gym.Env:
+                """Create environment with both local and remote components."""
+        
+                components = {
+                    name: build_component(cfg) for name, cfg in config.components.items()
+                }
+                component_sensors = {
+                    name: ComponentSensor(cfg)
+                    for name, cfg in zip(
+                        config.components.keys(),
+                        [cfg.sensor for cfg in config.components.values()],
+                    )
+                }
+                thermal_sensor = ThermalSensor(config.thermal_sensor)
+                thermal_model = build_thermal_model(config.thermal_model)
+                dataset = build_dataset(config.dataset)
+                reward_manager = RewardManagerFactory.create(config.reward_manager, config.economic)
+        
+                building_env = BuildingEnvironment(
+                    components=components,
+                    comp_sensors=component_sensors,
+                    thermal_sensor=thermal_sensor,
+                    dataset=dataset,
+                    thermal_model=thermal_model,
+                    reward_manager=reward_manager,
+                    params=config.params,
+                )
+        
+                if not config.wrappers:
+                    return building_env
+        
+                # 3. Apply wrappers (Decorator Pattern)
+                #    The order of wrapping can be important. Generally, action wrappers
+                #    should be last (outermost) and observation wrappers first (innermost).
+                wrapped_env = building_env
+        
+                misc_wrapper_config = config.wrappers.get("misc", {})
+                if "max_episode_steps" in misc_wrapper_config:
+                    wrapped_env = gym.wrappers.TimeLimit(wrapped_env, max_episode_steps=misc_wrapper_config["max_episode_steps"])
+        
+        
+                # NOTE: Always apply flattening of Dict observation spaces first
+                wrapped_env = gym.wrappers.FlattenObservation(wrapped_env)
+        
+                observation_wrapper_config = config.wrappers.get("observation_space", {})
+                if "noise_std" in observation_wrapper_config:
+                    def noise(obs):
+                        return obs + np.random.normal(0, observation_wrapper_config["noise_std"], size=obs.shape)
+                    wrapped_env = gym.wrappers.TransformObservation(wrapped_env, func=noise, observation_space=wrapped_env.observation_space)
+                if "framestack_size" in observation_wrapper_config and observation_wrapper_config["framestack_size"] > 1:
+                    wrapped_env = gym.wrappers.FrameStackObservation(wrapped_env, observation_wrapper_config["framestack_size"])
+                if "time_aware" in observation_wrapper_config and observation_wrapper_config["time_aware"]:
+                    wrapped_env = gym.wrappers.TimeAwareObservation(wrapped_env)
+                if "normalize" in observation_wrapper_config and observation_wrapper_config["normalize"]:
+                    wrapped_env = gym.wrappers.NormalizeObservation(wrapped_env, epsilon=1e-8)
+        
+        
+                action_wrapper_config = config.wrappers.get("action_space", {})
+                if "discrete_bins" in action_wrapper_config:
+                    wrapped_env = ActionDiscretizerWrapper(wrapped_env, action_wrapper_config["discrete_bins"])
+        
+                # NOTE: Always apply flattening of Dict action spaces before clipping
+                wrapped_env = ActionFlattenerWrapper(wrapped_env)
+        
+                if "clip_actions" in action_wrapper_config and action_wrapper_config["clip_actions"]:
+                    wrapped_env = gym.wrappers.ClipAction(wrapped_env)
+        
+                print(f"Successfully created environment. Final wrapped env: {wrapped_env}")
+                return wrapped_env
+    building_environment.py
+        from gymnasium import spaces, Env
+        import numpy as np
+        from energysim.core.components.base import (
+            ComponentBase,
+        )
+        from energysim.core.components.outputs import (
+            ComponentOutputs,
+            ElectricalEnergy,
+        )
+        from energysim.core.thermal.state import ThermalState
+        from energysim.core.thermal.base import ThermalModel
+        from energysim.core.data.dataset import EnergyDataset
+        from dataclasses import dataclass
+        from typing import Any, Dict, Mapping, Optional, Tuple
+        from energysim.reward.contexts import (
+            RewardContext,
+        )
+        from energysim.reward.manager import RewardManager
+        from energysim.core.components.sensors import Sensor
+        from energysim.core.state import SimulationState
+        from energysim.rl.data_column import DataColumn
+        
+        from energysim.rl.utils import get_gymnasium_space
+        
+        @dataclass
+        class EnvironmentParameters:
+            """Parameters for the modular building environment."""
+        
+            random_seed: int
+        
+        class BuildingEnvironment(Env):
+            """
+            A Gymnasium environment for simulating building energy systems.
+        
+            This environment follows a three-phase simulation loop:
+            1.  State Creation: The world's conditions (weather, price, etc.) are established.
+            2.  Component Simulation: Controllable components react to the state and an action.
+            3.  System Balancing: All energy flows are aggregated to determine the final system
+                state, from which rewards and observations are calculated.
+            """
+            def __init__(
+                self,
+                components: Mapping[str, ComponentBase],
+                comp_sensors: Mapping[str, Sensor],
+                thermal_sensor: Sensor,
+                dataset: EnergyDataset,
+                thermal_model: ThermalModel,
+                reward_manager: RewardManager,
+                params: EnvironmentParameters,
+            ):
+                super().__init__()
+                # Static elements of the environment
+                self.controllable_components = components
+                self.comp_sensors = comp_sensors
+                self.thermal_sensor = thermal_sensor
+                self.dataset = dataset
+                self.thermal_model = thermal_model
+                self.reward_manager = reward_manager
+                self.params = params
+        
+                # Internal state, managed by step() and reset()
+                self._timestep_index: int = 0
+                self._current_thermal_state: Optional[ThermalState] = None
+                self._current_component_outputs: Optional[Dict[str, ComponentOutputs]] = None
+        
+            def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                """
+                Resets the environment to its initial state for a new episode.
+                """
+                super().reset(seed=seed)
+        
+                # 1. Initialize all stateful models to their starting conditions
+                self._current_component_outputs = {
+                    name: component.initialize() for name, component in self.controllable_components.items()
+                }
+                self._current_thermal_state = self.thermal_model.initialize()
+                self._timestep_index = 0
+        
+                # 2. Create the initial SimulationState for timestep t=0
+                initial_state = SimulationState(
+                    timestep_data=self.dataset[self._timestep_index],
+                    thermal_state=self._current_thermal_state,
+                    component_outputs=self._current_component_outputs
+                )
+        
+                # 3. Assemble the initial observation
+                # For reset, the "final" state is the same as the initial state.
+                observation = self._assemble_observation(
+                    final_thermal_state=self._current_thermal_state,
+                    endogenous_outputs=self._current_component_outputs,
+                    simulation_state=initial_state
+                )
+                info = {}
+        
+                return observation, info
+        
+            def step(self, action: Dict[str, Dict[str, np.ndarray]]) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
+                """Advances the environment by one timestep based on the given action."""
+        
+                # --- PHASE 0: Time Advancement & Termination Check ---
+                self._timestep_index += 1
+                terminated = self._timestep_index >= len(self.dataset)
+                if terminated:
+                    # Create a dummy observation if we step past the end
+                    last_obs, info = self.reset(seed=self.params.random_seed)
+                    return last_obs, 0.0, True, False, {"status": "Episode terminated at dataset end"}
+        
+                # --- PHASE 1: State Creation (The "Givens") ---
+                current_state = SimulationState(
+                    timestep_data=self.dataset[self._timestep_index],
+                    thermal_state=self._current_thermal_state,
+                    component_outputs=self._current_component_outputs
+                )
+                dt_seconds = current_state.timestep_data.dt_seconds
+        
+                # --- PHASE 2: Component Simulation (The "Computed Results") ---
+                endogenous_outputs: Dict[str, ComponentOutputs] = {}
+                for name, component in self.controllable_components.items():
+                    component_action = {k: float(v) for k, v in action.get(name, {}).items()}
+                    endogenous_outputs[name] = component.advance(
+                        action=component_action,
+                        state=current_state,
+                        dt_seconds=dt_seconds
+                    )
+        
+                # --- PHASE 3: System Balancing & Finalization ---
+                # Aggregate computed endogenous flows with given exogenous flows
+                exogenous_flows = ComponentOutputs(
+                    electrical_energy=ElectricalEnergy(
+                        demand_j=current_state.timestep_data.features.get(DataColumn.LOAD)[0],
+                        generation_j=current_state.timestep_data.features.get(DataColumn.PV)[0]
+                    )
+                )
+                system_balance = sum(endogenous_outputs.values(), start=exogenous_flows)
+        
+                # Advance the thermal model using the final balance
+                new_thermal_state = self.thermal_model.advance(
+                    thermal_energy_j=system_balance.thermal_energy.net_heating,
+                    ambient_temperature=current_state.timestep_data["ambient_temperature"][0],
+                    dt_seconds=dt_seconds
+                )
+        
+                # Calculate reward and info based on the complete step transition
+                reward, info = self._calculate_reward_and_info(
+                    system_balance=system_balance,
+                    final_thermal_state=new_thermal_state,
+                    initial_state=current_state
+                )
+        
+                # --- FINALIZATION ---
+                # Update internal state for the next step (t+1)
+                self._current_thermal_state = new_thermal_state
+                self._current_component_outputs = endogenous_outputs
+        
+                # Assemble the observation for the agent to see at the start of t+1
+                observation = self._assemble_observation(
+                    final_thermal_state=new_thermal_state,
+                    endogenous_outputs=endogenous_outputs,
+                    simulation_state=current_state
+                )
+        
+                truncated = False # Can be extended with other episode truncation logic
+                return observation, reward, terminated, truncated, info
+        
+            def _assemble_observation(self, final_thermal_state: ThermalState, endogenous_outputs: Dict[str, ComponentOutputs], simulation_state: SimulationState) -> Dict[str, Any]:
+                """Assembles the complete observation dictionary from the final state of a step."""
+                observations = {}
+        
+                # Get observations from controllable component sensors
+                for name, sensor in self.comp_sensors.items():
+                    # Use the newly computed outputs for the observation
+                    observations[name] = sensor.read(endogenous_outputs[name])
+        
+                # Get observation from the thermal model sensor
+                observations["thermal"] = self.thermal_sensor.read(final_thermal_state)
+        
+                # Add observations from the external dataset (which can include forecasts)
+                observations["data"] = simulation_state.timestep_data.features
+        
+                return observations
+        
+            def _calculate_reward_and_info(self, system_balance: ComponentOutputs, final_thermal_state: ThermalState, initial_state: SimulationState) -> Tuple[float, Dict[str, Any]]:
+                """Calculates the reward and constructs the info dictionary for the step."""
+        
+                # Create a rich context for the reward manager
+                reward_context = RewardContext(
+                    simulation_state=initial_state,
+                    system_balance=system_balance,
+                    thermal_state=final_thermal_state
+                )
+                reward, reward_info = self.reward_manager.calculate_reward(context=reward_context)
+        
+                # Assemble the info dictionary for logging and analysis
+                info = {
+                    "reward_breakdown": reward_info,
+                    "grid_interaction_j": system_balance.electrical_energy.net,
+                    "temperature_c": final_thermal_state.temperature,
+                    "temperature_error_c": final_thermal_state.temperature_error,
+                    "timestamp": initial_state.timestep_data.timestamp,
+                }
+        
+                return reward, info
+        
+            @property
+            def action_space(self) -> spaces.Space:
+                spaces_dict = {}
+                for component_name, component in self.controllable_components.items():
+                    spaces_dict[component_name] = get_gymnasium_space(component.action_space)
+                return spaces.Dict(spaces_dict)
+        
+            @property
+            def observation_space(self) -> spaces.Space:
+                spaces_dict = {}
+        
+                # Add dataset observations
+                spaces_dict["data"] = spaces.Dict({
+                    col: spaces.Box(
+                        low=-np.inf,
+                        high=np.inf,
+                        shape=(1 + (self.dataset.params.prediction_horizon or 0),),
+                        dtype=np.float32,
+                    )
+                    for col in [DataColumn.LOAD, DataColumn.PV, DataColumn.PRICE] if col in self.dataset.params.feature_columns
+                })
+        
+                # Add component observation spaces
+                for sensor_name, sensor in self.comp_sensors.items():
+                    spaces_dict[sensor_name] = get_gymnasium_space(sensor.observation_space)
+        
+                # Add thermal model observations
+                if "thermal" in self.comp_sensors:
+                    raise ValueError("Thermal sensor must be provided separately.")
+                spaces_dict["thermal"] = get_gymnasium_space(
+                    self.thermal_sensor.observation_space
+                )
+        
+                return spaces.Dict(spaces_dict)
+        
+            def __repr__(self) -> str:
+                return (
+                    f"<BuildingEnvironment("
+                    f"components={len(self.controllable_components)}, "
+                    f"sensors={len(self.comp_sensors)}, "
+                    f"thermal_sensor={'set' if self.thermal_sensor else 'None'}, "
+                    f"dataset_length={len(self.dataset)}, "
+                    f"reward_manager={self.reward_manager.__class__.__name__}, "
+                    f"random_seed={self.params.random_seed}, "
+                    f"action_space={self.action_space}, "
+                    f"observation_space={self.observation_space})>"
+                )
+        
+            __str__ = __repr__
+    utils.py
+        from energysim.core.shared.spaces import (
+            Space,
+            DiscreteSpace,
+            ContinuousSpace,
+            DictSpace
+        )
+        from gymnasium import spaces
+        import numpy as np
+        
+        def get_gymnasium_space(space: Space) -> spaces.Space:
+            """Convert a Space into a Gymnasium space."""
+            if isinstance(space, DiscreteSpace):
+                return spaces.Discrete(space.n_actions)
+            elif isinstance(space, ContinuousSpace):
+                return spaces.Box(
+                    low=np.array([space.lower_bound]),
+                    high=np.array([space.upper_bound]),
+                    dtype=np.float32,
+                )
+            elif isinstance(space, DictSpace):
+                return spaces.Dict(
+                    {k: get_gymnasium_space(v) for k, v in space.spaces.items()}
+                )
+            else:
+                raise TypeError(f"Unsupported Space type: {type(space)}")
+    data_column.py
+        from enum import StrEnum
+        
+        class DataColumn(StrEnum):
+            LOAD = "load"
+            PRICE = "price"
+            PV = "pv"
+            AMBIENT_TEMPERATURE = "ambient_temperature"
+    __init__.py
+    wrappers/
+        action_discretizer.py
+            # energysim/rl/wrappers/action_discretizer.py
+            
+            import gymnasium as gym
+            import numpy as np
+            from gymnasium import spaces
+            from copy import deepcopy
+            
+            class ActionDiscretizerWrapper(gym.ActionWrapper):
+                """
+                Wraps a continuous Dict action space to discretize specific components.
+                """
+                def __init__(self, env: gym.Env, comp_to_num_bins: dict):
+                    super().__init__(env)
+                    self.comp_to_num_bins = comp_to_num_bins
+                    self.original_action_space = env.action_space
+                    self.action_mappings = {}
+            
+                    # Build the new, discretized action space
+                    new_action_space = {}
+                    assert isinstance(self.original_action_space, spaces.Dict), "Original action space must be a Dict."
+                    for comp_name, space in self.original_action_space.items():
+                        if comp_name in self.comp_to_num_bins:
+                            n_bins = self.comp_to_num_bins[comp_name]
+                            # Create a mapping from integer action to continuous value
+                            if not isinstance(space, spaces.Dict):
+                                raise ValueError(f"Component {comp_name} action space must be a Dict. Got {space}.")
+                            sub_action_mappings = {}
+                            sub_action_spaces = {}
+                            for sub_key, sub_space in space.spaces.items():
+                                if not (isinstance(sub_space, spaces.Box) and sub_space.shape == (1,)):
+                                    raise ValueError(f"Sub-action {sub_key} of component {comp_name} must have a Box action space with shape (1,). Got {sub_space}.")
+                                sub_action_mappings[sub_key] = np.linspace(sub_space.low, sub_space.high, n_bins)
+                                # NOTE: We assume for simplicity that each component sub action has the same number of bins
+                                sub_action_spaces[sub_key] = spaces.Discrete(n_bins)
+                            self.action_mappings[comp_name] = sub_action_mappings
+                            new_action_space[comp_name] = spaces.Dict(sub_action_spaces)
+                        else:
+                            new_action_space[comp_name] = space  # Keep original space for non-discretized components
+                    self.action_space = spaces.Dict(new_action_space)
+            
+                def _discrete_to_continuous(self, discrete_action: dict) -> dict:
+                    """Converts a discrete action dict to a continuous one."""
+                    continuous_action = deepcopy(discrete_action)
+                    for comp_name, sub_actions in discrete_action.items():
+                        assert isinstance(sub_actions, dict), f"Expected sub-actions for component {comp_name} to be a dict, got {type(sub_actions)}"
+                        if comp_name in self.action_mappings:
+                            for sub_key, action_val in sub_actions.items():
+                                action_mapping = self.action_mappings[comp_name][sub_key]
+                                continuous_action[comp_name][sub_key] = action_mapping[action_val]
+                        else:
+                            pass # Keep original action for non-discretized components
+            
+                    return continuous_action
+            
+                def action(self, action):
+                    return self._discrete_to_continuous(action)
+        __init__.py
+        action_flattener.py
+            import gymnasium as gym
+            from gymnasium import spaces
+            from gymnasium.wrappers import TransformAction
+            from gymnasium.core import ActType, ObsType, WrapperActType
+            import numpy as np
+            
+            class ActionFlattenerWrapper(
+                TransformAction[ObsType, WrapperActType, ActType],
+                gym.utils.RecordConstructorArgs,
+            ):
+                """Flattens the environment's action space and the actions passed to `step`.
+            
+                This wrapper is a more robust version of action flattening. It handles
+                hybrid action spaces (containing both `Box` and `Discrete` spaces)
+                by using an `argmax` mechanism for the discrete components. This makes it
+                compatible with standard RL agents that output continuous values and allows
+                for direct use of `env.action_space.sample()` for testing.
+            
+                Example:
+                    >>> import gymnasium as gym
+                    >>> from energysim.rl.wrappers.action_flattener import ActionFlattenerWrapper
+                    >>> space = gym.spaces.Dict({
+                    ...     "discrete": gym.spaces.Discrete(2),
+                    ...     "continuous": gym.spaces.Box(low=-1, high=1, shape=(3,))
+                    ... })
+                    >>> env = gym.make("SomeEnv-v0")
+                    >>> env.action_space = space
+                    >>> env = ActionFlattenerWrapper(env)
+                    >>> env.action_space.shape
+                    (5,)
+                    >>> # The sampled action is now valid for env.step()
+                    >>> random_action = env.action_space.sample()
+                    >>> env.step(random_action)
+                """
+            
+                def __init__(self, env: gym.Env):
+                    """Initializes the wrapper, calculates the flat action space, and sets up the robust unflattening function."""
+                    gym.utils.RecordConstructorArgs.__init__(self)
+            
+                    # The flattened space is a simple Box representing all combined action dimensions.
+                    flat_action_space = spaces.utils.flatten_space(env.action_space)
+            
+                    # The function maps a flat vector back to the original structured action.
+                    # We pass a reference to our custom, robust unflattening method.
+                    TransformAction.__init__(
+                        self,
+                        env=env,
+                        func=lambda flat_action: self._robust_unflatten(
+                            env.action_space, flat_action
+                        ),
+                        action_space=flat_action_space,
+                    )
+            
+                def _robust_unflatten(
+                    self, space: spaces.Space, flat_action: np.ndarray
+                ) -> ActType:
+                    """Recursively unflattens a flat action vector into a structured action.
+            
+                    This method is the core of the wrapper's robustness. It correctly
+                    handles nested `Dict` and `Tuple` spaces while using a special `argmax`
+                    method for `Discrete` spaces. This allows a continuous vector of values
+                    (from a sampler or RL agent) to be correctly interpreted as discrete actions.
+            
+                    Args:
+                        space: The (potentially nested) action space to unflatten into.
+                        flat_action: The flat numpy array representing the action.
+            
+                    Returns:
+                        A structured action that conforms to the original action space.
+                    """
+                    if isinstance(space, spaces.Discrete):
+                        # THE KEY CHANGE: Instead of expecting a one-hot vector, we take the
+                        # index of the highest value in the corresponding action slice. This
+                        # robustly converts a continuous output into a discrete choice.
+                        return int(np.argmax(flat_action))
+            
+                    if isinstance(space, spaces.Box):
+                        # Standard unflattening for Box spaces.
+                        return flat_action.reshape(space.shape)
+            
+                    if isinstance(space, spaces.Tuple):
+                        # Recursively unflatten for each subspace in the Tuple.
+                        unflattened_actions = []
+                        start_idx = 0
+                        for subspace in space.spaces:
+                            end_idx = start_idx + spaces.utils.flatdim(subspace)
+                            unflattened_actions.append(
+                                self._robust_unflatten(subspace, flat_action[start_idx:end_idx])
+                            )
+                            start_idx = end_idx
+                        return tuple(unflattened_actions)
+            
+                    if isinstance(space, spaces.Dict):
+                        # Recursively unflatten for each subspace in the Dict.
+                        unflattened_actions = {}
+                        start_idx = 0
+                        for key, subspace in space.spaces.items():
+                            end_idx = start_idx + spaces.utils.flatdim(subspace)
+                            unflattened_actions[key] = self._robust_unflatten(
+                                subspace, flat_action[start_idx:end_idx]
+                            )
+                            start_idx = end_idx
+                        return unflattened_actions
+            
+                    if isinstance(space, (spaces.MultiBinary, spaces.MultiDiscrete)):
+                        # Handle these common spaces similarly to Box.
+                        return flat_action.reshape(space.shape).astype(space.dtype)
+            
+                    raise TypeError(f"Unsupported action space type to unflatten: {type(space)}")
+        __pycache__/
+    rewards/
+        __pycache__/
+        layers/
+            __pycache__/
+    __pycache__/
+cosim/
+    factory.py
+        from energysim.core.components.sensors import ComponentSensor, ThermalSensor
+        from energysim.cosim.config import BuildingSimulationConfig
+        from energysim.cosim.building_sim import BuildingSimulator
+        
+        from energysim.core.components.factory import build_component
+        from energysim.core.thermal.factory import build_thermal_model
+        from energysim.core.data.factory import build_dataset
+        
+        
+        class SimulatorFactory:
+            @staticmethod
+            def create_simulator(config: BuildingSimulationConfig) -> BuildingSimulator:
+                """Create simulator with components."""
+        
+                components = {
+                    name: build_component(cfg) for name, cfg in config.components.items()
+                }
+                component_sensors = {
+                    name: ComponentSensor(cfg)
+                    for name, cfg in zip(
+                        config.components.keys(),
+                        [cfg.sensor for cfg in config.components.values()],
+                    )
+                }
+                thermal_sensor = ThermalSensor(config.thermal_sensor)
+                thermal_model = build_thermal_model(config.thermal_model)
+                dataset = build_dataset(config.dataset)
+        
+        
+                return BuildingSimulator(
+                    components=components,
+                    thermal_model=thermal_model,
+                    dataset=dataset,
+                    comp_sensors=component_sensors,
+                    thermal_sensor=thermal_sensor,
+                )
+    building_sim.py
+        
+        from dataclasses import dataclass
+        from typing import Dict, Mapping, Optional, Any, Union, TypedDict
+        import numpy as np
+        import logging
+        
+        from energysim.core.components.base import ActionDrivenComponent, ComponentBase, StateAwareComponent
+        from energysim.core.components.outputs import ComponentOutputs, ElectricalEnergy
+        from energysim.core.components.sensors import ComponentSensor, Sensor, ComponentSensorOutputs, ThermalSensorOutputs
+        from energysim.core.shared.spaces import DictSpace, Space
+        from energysim.core.thermal.state import ThermalState
+        from energysim.core.thermal.models import ThermalModel
+        from energysim.core.data.dataset import EnergyDataset
+        from energysim.core.state import SimulationState
+        from energysim.core.components.sensors import ComponentSensorConfig
+        
+        logger = logging.getLogger(__name__)
+        
+        class ObservationDict(TypedDict):
+            thermal: dict[str, ThermalSensorOutputs]
+            data: dict[str, np.ndarray]
+            components: dict[str, ComponentSensorOutputs]
+        
+        
+        @dataclass(frozen=True, slots=True)
+        class SimulationTimestepResult:
+            """
+            Holds all calculated data for a single completed simulation timestep.
+        
+            This is the "result" of advancing the simulation by one step.
+            """
+            # The timestamp this data corresponds to (e.g., timestamp at time t)
+            timestamp: int
+        
+            # The state at the *beginning* of the timestep (state_t)
+            simulation_state: SimulationState
+        
+            # The outputs from components calculated *during* the timestep (outputs_t)
+            component_outputs: Dict[str, ComponentOutputs]
+        
+            # The resulting thermal state *at the end* of the timestep (thermal_state_t)
+            final_thermal_state: ThermalState
+        
+            # The aggregated net energy flows *during* the timestep (balance_t)
+            system_balance: ComponentOutputs
+        
+            # Observations collected during the timestep
+            observations: ObservationDict
+        
+        
+        class BuildingSimulator:
+            """
+            A bare, decoupled building simulator.
+        
+            This class orchestrates the core simulation logic without any reference
+            to reinforcement learning, objectives, or observations. It is responsible for:
+        
+            1.  Managing the simulation's internal state (time, thermal, components).
+            2.  Stepping the simulation forward given a set of component actions.
+            3.  Aggregating energy flows and advancing the thermal model.
+        
+            It follows the same three-phase simulation loop as the BuildingEnvironment:
+            1.  State Creation: Establish "given" conditions for the timestep.
+            2.  Component Simulation: Compute results from controllable components based on actions.
+            3.  System Balancing: Aggregate flows and advance the building's thermal state.
+            """
+        
+            def __init__(
+                self,
+                components: Mapping[str, ComponentBase],
+                comp_sensors: Mapping[str, Sensor],
+                thermal_sensor: Sensor,
+                dataset: EnergyDataset,
+                thermal_model: ThermalModel,
+            ):
+                # Static elements of the simulation
+                self.components = components
+                self.dataset = dataset
+                self.thermal_model = thermal_model
+                self.comp_sensors = comp_sensors
+                self.thermal_sensor = thermal_sensor
+        
+                # NOTE: External components will always be observed fully
+                self.external_sensor = ComponentSensor(ComponentSensorConfig(observe_cooling_flow=True, observe_heating_flow=True, observe_electrical_flow=True, observe_electrical_soc=True, observe_thermal_soc=True, soc_noise_std=0.0, flow_noise_std=0.0))
+        
+                # Internal state, managed by step() and reset()
+                self._timestep_index: int = 0
+                self._current_thermal_state: Optional[ThermalState] = None
+                self._current_component_outputs: Optional[Dict[str, ComponentOutputs]] = None
+                self.is_done: bool = False
+        
+            def reset(self) -> SimulationTimestepResult:
+                """
+                Resets the simulator to its initial state at t=0.
+        
+                Initializes all stateful models (components, thermal model) and
+                returns the complete state of the system at the very first timestep.
+        
+                Returns:
+                    SimulationTimestepResult: The state of the system at t=0.
+                """
+                # 1. Initialize all stateful models to their starting conditions
+                self._current_component_outputs = {
+                    name: component.initialize()
+                    for name, component in self.components.items()
+                }
+                self._current_thermal_state = self.thermal_model.initialize()
+                self._timestep_index = 0
+                self.is_done = False
+        
+                # 2. Create the initial SimulationState for timestep t=0
+                initial_timestep_data = self.dataset[self._timestep_index]
+                initial_sim_state = SimulationState(
+                    timestep_data=initial_timestep_data,
+                    thermal_state=self._current_thermal_state,
+                    component_outputs=self._current_component_outputs
+                )
+        
+                # 3. Assemble the initial result package
+                # At t=0, the "balance" is just the sum of initial component states (e.g., storage)
+                initial_balance = sum(
+                    self._current_component_outputs.values(), start=ComponentOutputs()
+                )
+                observations = self._assemble_observation(
+                    final_thermal_state=self._current_thermal_state,
+                    endogenous_outputs=self._current_component_outputs,
+                    simulation_state=initial_sim_state
+                )
+        
+                initial_result = SimulationTimestepResult(
+                    timestamp=initial_timestep_data.timestamp,
+                    simulation_state=initial_sim_state,
+                    component_outputs=self._current_component_outputs,
+                    final_thermal_state=self._current_thermal_state,
+                    system_balance=initial_balance,
+                    observations=observations
+                )
+        
+                return initial_result
+        
+            def step(self, action: Dict[str, Dict[str, float]], external_component_outputs: Optional[Dict[str, ComponentOutputs]] = None) -> Optional[SimulationTimestepResult]:
+                """
+                Advances the simulation by one timestep based on the given action.
+        
+                This method simulates the interval from t to t+1 using the action `action_t`.
+        
+                Args:
+                    action: A dictionary mapping component names to their specific
+                            action dictionaries (e.g., {"battery": {"normalized_power": -0.5}}).
+                    external_component_outputs: A dictionary of external endogenous component outputs
+                                                that should be included in the system balance.
+        
+                Returns:
+                    Optional[SimulationTimestepResult]:
+                        - The complete result of the simulation step if successful.
+                        - None if the simulation has reached the end of the dataset.
+                """
+                if self.is_done:
+                    raise RuntimeError(
+                        "Simulation is finished. Call reset() to start a new episode."
+                    )
+        
+                if external_component_outputs is not None:
+                    for k, v in external_component_outputs.items():
+                        if not isinstance(v, ComponentOutputs):
+                            raise ValueError(
+                                f"External component output for '{k}' is not a ComponentOutputs instance."
+                            )
+                    logger.warning("MPC formulations should not be used with external component outputs.")
+        
+                # --- PHASE 0: Time Advancement & Termination Check ---
+                # This logic follows the BuildingEnvironment, where step(action_t)
+                # calculates the state for t+1.
+                self._timestep_index += 1
+                if self._timestep_index >= len(self.dataset):
+                    self.is_done = True
+                    return None  # Signifies the end of the simulation episode
+        
+                # --- PHASE 1: State Creation (The "Givens" for interval [t, t+1]) ---
+                # Note: This state uses data from t+1 but thermal/component state from t
+                current_state = SimulationState(
+                    timestep_data=self.dataset[self._timestep_index],
+                    thermal_state=self._current_thermal_state,
+                    component_outputs=self._current_component_outputs
+                )
+                dt_seconds = current_state.timestep_data.dt_seconds
+        
+                # --- PHASE 2: Component Simulation (The "Computed Results") ---
+                # Apply action_t to compute the outputs for the *next* state
+                endogenous_outputs: Dict[str, ComponentOutputs] = {}
+                for name, component in self.components.items():
+                    if name not in action:
+                        raise ValueError(f"Missing action for component '{name}' in step().")
+                    if isinstance(component, ActionDrivenComponent):
+                        endogenous_outputs[name] = component.advance(
+                            action=action[name],
+                            dt_seconds=dt_seconds
+                        )
+                    elif isinstance(component, StateAwareComponent):
+                        endogenous_outputs[name] = component.advance(
+                            action=action[name],
+                            state=current_state,
+                            dt_seconds=dt_seconds
+                        )
+        
+                # Include any external endogenous component outputs
+                if external_component_outputs is not None:
+                    for k, v in external_component_outputs.items():
+                        endogenous_outputs[f"external_{k}"] = v
+        
+                # --- PHASE 3: System Balancing & Finalization ---
+                # Aggregate computed endogenous flows with given exogenous flows
+                # Exogenous flows are from the *current* timestep's data (t+1)
+                exogenous_flows = ComponentOutputs(
+                    electrical_energy=ElectricalEnergy(
+                        demand_j=current_state.timestep_data.get("load", np.array([0.0]))[0],
+                        generation_j=current_state.timestep_data.get("pv", np.array([0.0]))[0]
+                    )
+                )
+                system_balance = sum(endogenous_outputs.values(), start=exogenous_flows)
+        
+                # Advance the thermal model using the final balance and the state
+                # (which contains ambient temp, etc. for t+1)
+                new_thermal_state = self.thermal_model.advance(
+                    thermal_energy_j=system_balance.thermal_energy.net_heating,
+                    ambient_temperature=current_state.timestep_data["ambient_temperature"][0],
+                    dt_seconds=dt_seconds
+                )
+        
+                # Collect observations from components
+                observations = self._assemble_observation(
+                    final_thermal_state=new_thermal_state,
+                    endogenous_outputs=endogenous_outputs,
+                    simulation_state=current_state
+                )
+        
+                # --- FINALIZATION ---
+                # Update internal state to reflect the end of the interval [t, t+1]
+                self._current_thermal_state = new_thermal_state
+                self._current_component_outputs = endogenous_outputs
+        
+                # Package and return the results for this step
+                result = SimulationTimestepResult(
+                    timestamp=current_state.timestep_data.timestamp,
+                    simulation_state=current_state,
+                    component_outputs=endogenous_outputs,
+                    final_thermal_state=new_thermal_state,
+                    system_balance=system_balance,
+                    observations=observations
+                )
+        
+                return result
+        
+            def _assemble_observation(self, final_thermal_state: ThermalState, endogenous_outputs: Dict[str, ComponentOutputs], simulation_state: SimulationState) -> ObservationDict:
+                """Assembles the complete observation dictionary from the final state of a step."""
+                return ObservationDict(
+                    thermal=self.thermal_sensor.read(final_thermal_state),
+                    data=simulation_state.timestep_data.features,
+                    components={name: sensor.read(endogenous_outputs[name]) for name, sensor in self.comp_sensors.items()}
+                )
+        
+            @property
+            def current_simulation_state(self) -> SimulationState:
+                """
+                Returns the complete SimulationState for the current timestep.
+        
+                This represents the "inputs" to the *next* step() call.
+                """
+                if self.is_done:
+                    raise RuntimeError("Simulation is done.")
+        
+                return SimulationState(
+                    timestep_data=self.dataset[self._timestep_index],
+                    thermal_state=self._current_thermal_state,
+                    component_outputs=self._current_component_outputs
+                )
+        
+            def __repr__(self) -> str:
+                return (
+                    f"<BuildingSimulator("
+                    f"components={list(self.components.keys())}, "
+                    f"thermal_model={self.thermal_model.__class__.__name__}, "
+                    f"dataset_length={len(self.dataset)}, "
+                    f"current_step={self._timestep_index}, "
+                    f"is_done={self.is_done})>"
+                )
+        
+            @property
+            def action_space(self) -> Space:
+                """
+                Returns the combined action space for all components in the simulator.
+        
+                The returned structure maps component names to their respective action spaces.
+                """
+                return DictSpace(
+                    spaces={
+                        name: component.action_space
+                        for name, component in self.components.items()
+                    }
+                )
+    config.py
+        from dataclasses import dataclass
+        from typing import Dict
+        from energysim.core.components.config_types import ComponentConfig
+        from energysim.core.components.sensors import ThermalSensorConfig
+        from energysim.core.data.config import EnergyDatasetConfig
+        from energysim.core.thermal.config import ThermalModelConfig
+        
+        @dataclass
+        class BuildingSimulationConfig:
+            components: Dict[str, ComponentConfig]
+            thermal_sensor: ThermalSensorConfig
+            thermal_model: ThermalModelConfig
+            dataset: EnergyDatasetConfig
+    __pycache__/
+mpc/
+    base.py
+        # energysim/core/mpc/base.py (NEW FILE)
+        from abc import ABC, abstractmethod
+        from typing import TYPE_CHECKING, Dict, List
+        import casadi as ca
+        
+        if TYPE_CHECKING:
+            from .builder import MPCBuilder # Avoid circular import
+        
+        class MPCObjectiveContributor(ABC):
+            """
+            An interface for any object that can contribute a term
+            to the MPC objective function.
+            """
+            @abstractmethod
+            def add_mpc_objective_term(
+                self,
+                builder: MPCBuilder,
+                k: int, # Timestep index within the horizon
+                states: Dict[str, ca.SX],
+                actions: Dict[str, ca.SX],
+                exogenous: Dict[str, ca.SX]
+            ) -> ca.SX:
+                """
+                Return the symbolic cost term for this contributor at timestep k.
+                Should return 0.0 if no cost is added for this step.
+                """
+                pass
+        
+        class MPCFormulatable(ABC):
+            """
+            An interface for any simulation model (component, thermal, etc.)
+            that can describe its dynamics and constraints for an MPC problem.
+            """
+        
+            @abstractmethod
+            def get_mpc_state_variables(self, builder: "MPCBuilder") -> List[ca.SX]:
+                """
+                Return the symbolic state variables this model manages.
+                e.g., [soc] for a battery, [T_air, T_mass] for a thermal model.
+                """
+                pass
+        
+            @abstractmethod
+            def get_mpc_action_variables(self, builder: "MPCBuilder") -> List[ca.SX]:
+                """
+                Return the symbolic action variables this model controls.
+                e.g., [p_charge, p_discharge] for a battery.
+                """
+                pass
+        
+            @abstractmethod
+            def add_mpc_dynamics_constraints(
+                self,
+                builder: "MPCBuilder",
+                k: int,
+                states: Dict[str, ca.SX],
+                actions: Dict[str, ca.SX],
+                exogenous: Dict[str, ca.SX]
+            ):
+                """
+                Add the symbolic state transition constraints to the optimizer.
+                e.g., builder.add_constraint(states['soc_next'] == states['soc'] + ...)
+                """
+                pass
+        
+            @abstractmethod
+            def add_mpc_operational_constraints(
+                self,
+                builder: "MPCBuilder",
+                k: int,
+                states: Dict[str, ca.SX],
+                actions: Dict[str, ca.SX],
+                exogenous: Dict[str, ca.SX]
+            ):
+                """
+                Add operational constraints for this timestep.
+                e.g., builder.add_constraint(actions['p_charge'] <= self.max_power)
+                """
+                pass
+    __init__.py
+    builder.py
+        # energysim/core/mpc/builder.py (NEW FILE)
+        import casadi as ca
+        from typing import List, Dict
+        
+        from energysim.core.components.base import ComponentBase
+        from energysim.core.thermal.base import ThermalModel
+        from energysim.mpc.base import MPCFormulatable
+        from energysim.reward.manager import RewardManager
+        
+        class MPCBuilder:
+            def __init__(
+                self,
+                components: Dict[str, ComponentBase],
+                thermal_model: ThermalModel,
+                reward_manager: RewardManager,
+                horizon_steps: int,
+                dt_seconds: int
+            ):
+                self.all_components = components # Store for reference if needed
+                self.reward_manager = reward_manager
+                self.thermal_model = thermal_model
+                self.N = horizon_steps
+                self.dt_seconds = dt_seconds
+        
+                self.formulatable_models: Dict[str, MPCFormulatable] = {}
+                for name, comp in components.items():
+                    if isinstance(comp, MPCFormulatable):
+                        self.formulatable_models[name] = comp.model
+                    else:
+                        raise ValueError(f"Component {name} does not implement MPCFormulatable interface.")
+                if isinstance(thermal_model, MPCFormulatable):
+                    self.formulatable_models["thermal"] = thermal_model
+                else:
+                    raise ValueError("Thermal model does not implement MPCFormulatable interface.")
+        
+                self.opti = ca.Opti()
+                self.states: Dict[str, ca.SX] = {}
+                self.actions: Dict[str, ca.SX] = {}
+                self.exogenous: Dict[str, ca.SX] = {}
+        
+                self.initial_states: Dict[str, ca.SX] = {}
+        
+                self._build_problem()
+        
+            def _build_problem(self):
+                for comp_name, comp_model in self.formulatable_models.items():
+                    assert isinstance(comp_model, MPCFormulatable), "Model must implement MPCFormulatable"
+                    # Register state variables
+                    for state_var in comp_model.get_mpc_state_variables(self, comp_name):
+                        assert isinstance(state_var, ca.SX), "State variable must be casadi SX"
+                        self.states[state_var.name()] = self.opti.variable(self.N + 1, 1)
+        
+                    # Register action variables
+                    for action_var in comp_model.get_mpc_action_variables(self, comp_name):
+                        assert isinstance(action_var, ca.SX), "Action variable must be casadi SX"
+                        self.actions[action_var.name()] = self.opti.variable(self.N, 1)
+        
+                # 2. Define parameters for exogenous data (forecasts)
+                # (e.g., 'load', 'pv', 'price', 'ambient_temperature')
+                # This is simplified; you'd get these names from your dataset config
+                for name in self.feature_columns:
+                     self.exogenous[name] = self.opti.parameter(self.N, 1)
+        
+                # 3. Define Objective Function
+                total_objective = 0
+                for k in range(self.N):
+                    for layer in self.reward_layers:
+                        total_objective += layer.add_mpc_objective_term(self, k, self.states, self.actions, self.exogenous)
+        
+                self.opti.minimize(total_objective)
+        
+                # 4. Add Dynamics and Constraints
+                for k in range(self.N):
+                    # Pass dictionaries sliced at timestep k
+                    k_states = {name: var[k] for name, var in self.states.items()}
+                    k_next_states = {name: var[k+1] for name, var in self.states.items()}
+                    k_actions = {name: var[k] for name, var in self.actions.items()}
+                    k_exogenous = {name: var[k] for name, var in self.exogenous.items()}
+        
+                    # Add component dynamics & constraints
+                    for comp in self.components + [self.thermal_model]:
+                        comp.add_mpc_dynamics_constraints(self, k, k_states, k_next_states, k_actions, k_exogenous)
+                        comp.add_mpc_operational_constraints(self, k, k_states, k_actions, k_exogenous)
+        
+                # 5. Add Initial State Constraints
+                for name, param in self.initial_states.items():
+                    self.add_constraint(self.states[name][0] == param)
+        
+                # 6. Setup Solver
+                self.opti.solver('ipopt') # IPOPT is a good, free non-linear solver
+        
+            def add_constraint(self, constr):
+                self.opti.subject_to(constr)
+        
+            def set_initial_state(self, name: str, var: ca.SX):
+                # Called by get_mpc_state_variables
+                param = self.opti.parameter(1)
+                self.initial_states[name] = param
+                var.set_name(name) # Ensure var has a name
+        
+            def solve(self, current_state_dict: Dict, forecast_dict: Dict) -> Dict:
+                # 1. Set parameter values
+                for name, value in current_state_dict.items():
+                    self.opti.set_value(self.initial_states[name], value)
+        
+                for name, value_array in forecast_dict.items():
+                    self.opti.set_value(self.exogenous[name], value_array)
+        
+                # 2. Solve the problem
+                sol = self.opti.solve()
+        
+                # 3. Extract and return the *first* action
+                first_action = {}
+                for name, var in self.actions.items():
+                    first_action[name] = sol.value(var)[0]
+        
+                return first_action
+    __pycache__/
+objectives/
+    __pycache__/
+    terms/
+        __pycache__/
+reward/
+    contexts.py
+        from dataclasses import dataclass
+        from energysim.core.components.outputs import ComponentOutputs
+        from energysim.core.state import SimulationState
+        from energysim.core.thermal.base import ThermalState
+        
+        @dataclass
+        class RewardContext:
+            """
+            Unified container for system state for reward calculation.
+            """
+        
+            system_balance: ComponentOutputs
+            thermal_state: ThermalState
+            simulation_state: SimulationState
+    factory.py
+        """Class-level factory for simplified reward system creation."""
+        
+        import logging
+        
+        from energysim.reward.layers import (
+            EnergyRewardLayer,
+            ComfortRewardLayer,
+            EfficiencyRewardLayer,
+            GridStabilityRewardLayer,
+        )
+        from energysim.reward.manager import RewardManager
+        from energysim.reward.config import EconomicConfig, RewardConfig
+        
+        logger = logging.getLogger(__name__)
+        
+        
+        class RewardManagerFactory:
+            """Class-level factory for creating RewardManager instances."""
+        
+            @classmethod
+            def create(
+                cls, config: RewardConfig, economic_config: EconomicConfig, name: str = "BuildingEnvRewards"
+            ) -> RewardManager:
+                """
+                Create a RewardManager configured according to the given RewardConfig.
+        
+                Args:
+                    config: Reward configuration
+                    name: Name for the reward system
+        
+                Returns:
+                    Configured RewardManager instance
+                """
+                manager = RewardManager(name)
+        
+                # Energy layer
+                if config.energy_weight > 0:
+                    energy_layer = EnergyRewardLayer(weight=config.energy_weight, economic_config=economic_config, enabled=True)
+                    manager.add_layer(energy_layer, "energy")
+                    logger.info(f"Added energy layer with weight {config.energy_weight}")
+        
+                # Comfort layer
+                if config.comfort_weight > 0:
+                    comfort_layer = ComfortRewardLayer(
+                        weight=config.comfort_weight,
+                        temperature_comfort_band=config.temperature_comfort_band,
+                        humidity_comfort_band=config.humidity_comfort_band,
+                        max_penalty=config.max_comfort_penalty,
+                        enabled=True,
+                    )
+                    manager.add_layer(comfort_layer, "comfort")
+                    logger.info(f"Added comfort layer with weight {config.comfort_weight}")
+        
+                # Efficiency layer
+                if config.efficiency_weight > 0:
+                    efficiency_layer = EfficiencyRewardLayer(
+                        weight=config.efficiency_weight,
+                        renewable_bonus=config.renewable_bonus,
+                        self_consumption_bonus=config.self_consumption_bonus,
+                        enabled=True,
+                    )
+                    manager.add_layer(efficiency_layer, "efficiency")
+                    logger.info(
+                        f"Added efficiency layer with weight {config.efficiency_weight}"
+                    )
+        
+                # Grid stability layer
+                if config.grid_stability_weight > 0:
+                    grid_layer = GridStabilityRewardLayer(
+                        weight=config.grid_stability_weight,
+                        balance_tolerance=config.balance_tolerance,
+                        balance_bonus=config.balance_bonus,
+                        storage_bonus=config.storage_bonus,
+                        enabled=True,
+                    )
+                    manager.add_layer(grid_layer, "grid_stability")
+                    logger.info(
+                        f"Added grid stability layer with weight {config.grid_stability_weight}"
+                    )
+        
+                return manager
+    __init__.py
+    metrics.py
+        from dataclasses import dataclass
+        
+        
+        # ---------------------------
+        # Energy Metrics Data Models
+        # ---------------------------
+        
+        
+        @dataclass(frozen=True)
+        class EnergyMetrics:
+            net_energy_j: float  # Joules
+            energy_cost_eur: float  # Euros
+            renewable_fraction: float  # [0.0 - 1.0]
+            self_consumption_ratio: float  # [0.0 - 1.0]
+            curtailment_j: float  # Joules
+            carbon_emission_kg: float  # Kilograms CO₂
+            net_heating_j: float  # Joules
+        
+        
+        @dataclass(frozen=True)
+        class ComfortMetrics:
+            temperature_error_c: float  # °C deviation
+            humidity_error: float  # Fraction [0.0 - 1.0]
+            temperature_penalty: float  # Penalty (unitless)
+            humidity_penalty: float  # Penalty (unitless)
+            total_comfort_penalty: float  # Penalty (unitless)
+        
+        
+        @dataclass(frozen=True)
+        class EfficiencyMetrics:
+            generation_efficiency: float  # [0.0 - 1.0]
+            total_generation_j: float  # Joules
+            total_demand_j: float  # Joules
+            total_stored_energy_j: float  # Joules
+            energy_balance_j: float  # Joules
+        
+        
+        @dataclass(frozen=True)
+        class PeakDemandMetrics:
+            is_peak_demand_exceeded: bool
+            peak_demand_threshold_j: float  # Joules
+            current_demand_j: float  # Joules
+            excess_demand_j: float  # Joules
+            peak_demand_ratio: float  # Dimensionless
+    calculators.py
+        """Calculation services for extracting KPIs from domain objects."""
+        
+        
+        from energysim.core.thermal.base import ThermalState
+        from energysim.core.components.outputs import ComponentOutputs
+        from energysim.reward.metrics import (
+            EnergyMetrics,
+            EfficiencyMetrics,
+            PeakDemandMetrics,
+        )
+        
+        
+        class EnergyMetricsCalculator:
+            """Calculates energy-related KPIs from ComponentOutputs and economic context."""
+        
+            @staticmethod
+            def calculate_renewable_fraction(component_outputs: ComponentOutputs) -> float:
+                demand = component_outputs.electrical_energy.demand_j
+                generation = component_outputs.electrical_energy.generation_j
+                if demand <= 0:
+                    return 0.0
+                return min(1.0, generation / demand)
+        
+            @staticmethod
+            def calculate_self_consumption_ratio(component_outputs: ComponentOutputs) -> float:
+                demand = component_outputs.electrical_energy.demand_j
+                generation = component_outputs.electrical_energy.generation_j
+                if generation <= 0:
+                    return 0.0
+                return min(1.0, demand / generation)
+        
+            @staticmethod
+            def calculate_curtailment(component_outputs: ComponentOutputs) -> float:
+                demand = component_outputs.electrical_energy.demand_j
+                generation = component_outputs.electrical_energy.generation_j
+                return max(0.0, generation - demand)
+        
+            @staticmethod
+            def calculate_carbon_emissions(
+                component_outputs: ComponentOutputs, grid_emission_factor: float = 0.4e-6
+            ) -> float:
+                net_consumption = max(0.0, component_outputs.electrical_energy.net)
+                return net_consumption * grid_emission_factor
+        
+            @staticmethod
+            def get_energy_metrics(
+                component_outputs: ComponentOutputs,
+                grid_emission_factor: float = 0.4e-6,
+            ) -> EnergyMetrics:
+                return EnergyMetrics(
+                    net_energy_j=component_outputs.electrical_energy.net,
+                    energy_cost_eur=EnergyMetricsCalculator.calculate_energy_cost(
+                        component_outputs.electrical_energy.net
+                    ),
+                    renewable_fraction=EnergyMetricsCalculator.calculate_renewable_fraction(
+                        component_outputs
+                    ),
+                    self_consumption_ratio=EnergyMetricsCalculator.calculate_self_consumption_ratio(
+                        component_outputs
+                    ),
+                    curtailment_j=EnergyMetricsCalculator.calculate_curtailment(
+                        component_outputs
+                    ),
+                    carbon_emission_kg=EnergyMetricsCalculator.calculate_carbon_emissions(
+                        component_outputs, grid_emission_factor
+                    ),
+                    net_heating_j=component_outputs.thermal_energy.net_heating,
+                )
+        
+            @staticmethod
+            def calculate_energy_cost(tax_rate: float, price_eur_per_j: float, net_energy_j: float, feed_in_tariff_eur_per_j: float) -> float:
+                    """
+                    Calculate energy cost based on net energy consumption.
+        
+                    Args:
+                        net_energy_j: Net energy in joules (positive = consumption, negative = generation)
+        
+                    Returns:
+                        Cost in euros (positive = cost, negative = revenue)
+                    """
+                    if net_energy_j > 0:
+                        # Energy consumption
+                        base_cost = net_energy_j * price_eur_per_j
+                        return base_cost * (1 + tax_rate)
+                    else:
+                        # Energy generation (feed-in)
+                        return net_energy_j * feed_in_tariff_eur_per_j  # Negative value = revenue
+        
+            @staticmethod
+            def calculate_demand_charge(demand_charge_threshold_j: float, demand_charge_rate_eur_per_j: float, peak_power_w: float, duration_s: float) -> float:
+                """Calculate demand charges for peak power usage."""
+                if peak_power_w <= demand_charge_rate_eur_per_j * 1000:  # Convert kW to W
+                    return 0.0
+        
+                excess_power_w = peak_power_w - (demand_charge_threshold_j * 1000)
+                excess_energy_j = excess_power_w * duration_s
+                return excess_energy_j * demand_charge_rate_eur_per_j
+        
+        class ComfortMetricsCalculator:
+            """Calculates comfort-related KPIs from comfort metrics."""
+        
+            @staticmethod
+            def calculate_comfort_penalty(
+                thermal_state: ThermalState,
+                temperature_comfort_band: float = 2.0,
+                humidity_comfort_band: float = 0.1,
+                max_penalty: float = 10.0,
+            ) -> dict[str, float]:
+                """
+                Calculate comfort penalties for temperature and humidity deviations.
+        
+                Args:
+                    thermal_state: Comfort measurements and setpoints
+                    temperature_comfort_band: Acceptable temperature deviation in °C
+                    humidity_comfort_band: Acceptable humidity deviation (fraction)
+                    max_penalty: Maximum penalty per comfort type
+        
+                Returns:
+                    Dictionary with comfort errors and penalties
+                """
+                # Temperature penalty
+                temp_penalty = 0.0
+                if thermal_state.temperature_error > temperature_comfort_band:
+                    excess_temp_error = (
+                        thermal_state.temperature_error - temperature_comfort_band
+                    )
+                    temp_penalty = min(excess_temp_error**2, max_penalty)
+        
+                # Humidity penalty
+                humidity_penalty = 0.0
+                if thermal_state.humidity_error > humidity_comfort_band:
+                    excess_humidity_error = thermal_state.humidity_error - humidity_comfort_band
+                    humidity_penalty = min(
+                        excess_humidity_error**2 * 100, max_penalty
+                    )  # Scale humidity penalty
+        
+                return {
+                    "temperature_penalty": temp_penalty,
+                    "humidity_penalty": humidity_penalty,
+                }
+        
+            @staticmethod
+            def calculate_thermal_comfort_index(thermal_state: ThermalState) -> float:
+                """
+                Calculate simplified thermal comfort index (0.0 = perfect, 1.0 = max discomfort).
+        
+                Args:
+                    thermal_state: Comfort measurements
+        
+                Returns:
+                    Thermal comfort index between 0.0 and 1.0
+                """
+                # Simplified comfort index based on temperature and humidity deviations
+                temp_factor = min(
+                    1.0, thermal_state.temperature_error / 5.0
+                )  # Max discomfort at 5°C deviation
+                humidity_factor = min(
+                    1.0, thermal_state.humidity_error / 0.3
+                )  # Max discomfort at 30% humidity deviation
+        
+                # Weighted combination (temperature more important)
+                return 0.7 * temp_factor + 0.3 * humidity_factor
+        
+        
+        class EfficiencyMetricsCalculator:
+            """Calculates system efficiency KPIs using ComponentOutputs."""
+        
+            @staticmethod
+            def calculate_system_efficiency(
+                component_outputs: ComponentOutputs,
+            ) -> EfficiencyMetrics:
+                total_generation = (
+                    component_outputs.electrical_energy.generation_j
+                    + component_outputs.thermal_energy.heating_j
+                    + component_outputs.thermal_energy.cooling_j
+                )
+                total_demand = component_outputs.electrical_energy.demand_j
+        
+                generation_efficiency = (
+                    min(1.0, total_demand / total_generation) if total_generation > 0 else 0.0
+                )
+        
+                total_stored_energy = 0.0
+                if component_outputs.electrical_storage is not None:
+                    total_stored_energy += (
+                        component_outputs.electrical_storage.soc
+                        * component_outputs.electrical_storage.capacity
+                    )
+                if component_outputs.thermal_storage is not None:
+                    total_stored_energy += (
+                        component_outputs.thermal_storage.soc
+                        * component_outputs.thermal_storage.capacity
+                    )
+        
+                return EfficiencyMetrics(
+                    generation_efficiency=generation_efficiency,
+                    total_generation_j=total_generation,
+                    total_demand_j=total_demand,
+                    total_stored_energy_j=total_stored_energy,
+                    energy_balance_j=total_generation - total_demand,
+                )
+        
+            @staticmethod
+            def calculate_peak_demand_metrics(
+                component_outputs: ComponentOutputs, peak_demand_threshold: float
+            ) -> PeakDemandMetrics:
+                demand = component_outputs.electrical_energy.demand_j
+                is_peak_exceeded = demand > peak_demand_threshold
+                excess_demand = max(0.0, demand - peak_demand_threshold)
+        
+                return PeakDemandMetrics(
+                    is_peak_demand_exceeded=is_peak_exceeded,
+                    peak_demand_threshold_j=peak_demand_threshold,
+                    current_demand_j=demand,
+                    excess_demand_j=excess_demand,
+                    peak_demand_ratio=(demand / peak_demand_threshold)
+                    if peak_demand_threshold > 0
+                    else 0.0,
+                )
+    manager.py
+        from typing import Dict, Optional
+        from energysim.reward.contexts import RewardContext
+        from energysim.reward.layers import RewardLayer
+        
+        
+        class RewardManager:
+            """Reward manager without caching."""
+        
+            def __init__(self, name: str = "RewardManager"):
+                self.name = name
+                self.layers: Dict[str, RewardLayer] = {}
+                self.layer_order: list[str] = []
+                self._last_reward_breakdown: Dict[str, float] = {}
+        
+            def add_layer(self, layer: RewardLayer, layer_id: Optional[str] = None) -> None:
+                layer_id = layer_id or layer.name
+                self.layers[layer_id] = layer
+                if layer_id not in self.layer_order:
+                    self.layer_order.append(layer_id)
+        
+            def calculate_reward(self, context: RewardContext) -> tuple[float, dict]:
+                total_reward = 0.0
+                self._last_reward_breakdown = {}
+                for layer_id in self.layer_order:
+                    layer = self.layers[layer_id]
+                    layer_reward = layer.get_weighted_reward(context) if layer.enabled else 0.0
+                    total_reward += layer_reward
+                    self._last_reward_breakdown[layer_id] = layer_reward
+                return total_reward, self._last_reward_breakdown
+        
+            def get_last_reward_breakdown(self) -> Dict[str, float]:
+                return self._last_reward_breakdown
+    config.py
+        from dataclasses import dataclass
+        
+        
+        @dataclass(frozen=True)
+        class EconomicConfig:
+            """Immutable configuration for economic calculations."""
+            feed_in_tariff_eur_per_j: float = 1.0e-7
+            tax_rate: float = 0.19
+            demand_charge_threshold_j: float = 50.0
+            demand_charge_rate_eur_per_j: float = 0.1
+        
+        @dataclass(frozen=True)
+        class RewardConfig:
+            """Configuration for modular reward system layers - BEHAVIOR ONLY."""
+        
+            # Layer weights (0.0 = disabled, >0.0 = enabled with weight)
+            energy_weight: float = 1.0
+            comfort_weight: float = 0.1
+            efficiency_weight: float = 0.05
+            grid_stability_weight: float = 0.02
+        
+            # Comfort layer parameters (behavioral thresholds)
+            temperature_comfort_band: float = 2.0  # °C tolerance
+            humidity_comfort_band: float = 0.1  # fraction tolerance
+            max_comfort_penalty: float = 10.0  # max penalty value
+        
+            # Efficiency layer parameters (behavioral bonuses)
+            renewable_bonus: float = 0.05  # bonus amount
+            self_consumption_bonus: float = 0.02  # bonus amount
+        
+            # Grid stability layer parameters (behavioral thresholds)
+            balance_tolerance: float = 1000.0  # J tolerance for grid balance
+            balance_bonus: float = 0.02  # bonus amount
+            storage_bonus: float = 0.01  # bonus amount
+        
+            def __post_init__(self) -> None:
+                """Validate configuration parameters."""
+                if self.energy_weight < 0:
+                    raise ValueError("energy_weight must be non-negative")
+                if self.comfort_weight < 0:
+                    raise ValueError("comfort_weight must be non-negative")
+                if self.efficiency_weight < 0:
+                    raise ValueError("efficiency_weight must be non-negative")
+                if self.grid_stability_weight < 0:
+                    raise ValueError("grid_stability_weight must be non-negative")
+        
+                if self.temperature_comfort_band <= 0:
+                    raise ValueError("temperature_comfort_band must be positive")
+                if self.max_comfort_penalty <= 0:
+                    raise ValueError("max_comfort_penalty must be positive")
+    __pycache__/
+    layers/
+        energy.py
+            
+            from energysim.reward.contexts import RewardContext
+            from energysim.reward.calculators import (
+                EfficiencyMetricsCalculator,
+                EnergyMetricsCalculator,
+            )
+            from energysim.reward.layers.base import RewardLayer
+            from energysim.reward.config import EconomicConfig
+            from energysim.rl.data_column import DataColumn
+            
+            
+            class EnergyRewardLayer(RewardLayer):
+                """Energy reward layer without caching."""
+            
+                def __init__(
+                    self,
+                    economic_config: EconomicConfig,
+                    weight: float = 1.0,
+                    enabled: bool = True,
+                ):
+                    super().__init__(weight, enabled, "energy")
+                    self.economic_config = economic_config
+            
+                def calculate_reward(self, context: RewardContext) -> float:
+                    energy_cost = EnergyMetricsCalculator.calculate_energy_cost(
+                        self.economic_config.tax_rate,
+                        context.simulation_state.timestep_data.features[DataColumn.PRICE],
+                        context.system_balance.electrical_energy.net,
+                        self.economic_config.feed_in_tariff_eur_per_j,
+                    )
+                    peak_metrics = EfficiencyMetricsCalculator.calculate_peak_demand_metrics(
+                        context.system_balance,
+                        self.economic_config.demand_charge_threshold_j,
+                    )
+                    demand_penalty = (
+                        peak_metrics.excess_demand_j * self.economic_config.demand_charge_rate_eur_per_j
+                    )
+                    return -(energy_cost + demand_penalty)
+        base.py
+            from abc import ABC, abstractmethod
+            from typing import Optional, Dict, Any, TYPE_CHECKING
+            import logging
+            from energysim.mpc.base import MPCObjectiveContributor
+            from energysim.reward.contexts import RewardContext
+            import casadi as ca
+            
+            if TYPE_CHECKING:
+                from energysim.mpc.builder import MPCBuilder
+            
+            
+            class RewardLayer(ABC, MPCObjectiveContributor):
+                """Abstract base class for reward layers."""
+            
+                def __init__(
+                    self, weight: float = 1.0, enabled: bool = True, name: Optional[str] = None
+                ):
+                    self.weight = weight
+                    self.enabled = enabled
+                    self.name = name or self.__class__.__name__
+                    self.logger = logging.getLogger(f"{__name__}.{self.name}")
+            
+                @abstractmethod
+                def calculate_reward(self, context: RewardContext) -> float:
+                    pass
+            
+                def get_weighted_reward(self, context: RewardContext) -> float:
+                    if not self.enabled:
+                        return 0.0
+                    return self.calculate_reward(context) * self.weight
+            
+                def get_info(self, context: RewardContext) -> Dict[str, Any]:
+                    return {
+                        "name": self.name,
+                        "weight": self.weight,
+                        "enabled": self.enabled,
+                        "raw_reward": self.calculate_reward(context) if self.enabled else 0.0,
+                        "weighted_reward": self.get_weighted_reward(context),
+                    }
+            
+                def add_mpc_objective_term(
+                    self,
+                    builder: MPCBuilder,
+                    k: int,
+                    states: Dict[str, ca.SX],
+                    actions: Dict[str, ca.SX],
+                    exogenous: Dict[str, ca.SX]
+                ) -> ca.SX:
+                    """
+                    (Potentially abstract or provide default implementation)
+                    Return the symbolic cost term for this layer at timestep k.
+                    Remember: MPC minimizes cost, RL maximizes reward (usually cost = -reward).
+                    """
+                    # Default implementation returns zero cost
+                    return 0.0
+        efficiency.py
+            from energysim.reward.layers.base import RewardLayer
+            from energysim.reward.contexts import RewardContext
+            from energysim.reward.calculators import (
+                EnergyMetricsCalculator,
+            )
+            
+            
+            class EfficiencyRewardLayer(RewardLayer):
+                """Efficiency reward layer without caching."""
+            
+                def __init__(
+                    self,
+                    weight: float = 1.0,
+                    renewable_bonus: float = 0.05,
+                    self_consumption_bonus: float = 0.02,
+                    enabled: bool = True,
+                ):
+                    super().__init__(weight, enabled, "efficiency")
+                    self.renewable_bonus = renewable_bonus
+                    self.self_consumption_bonus = self_consumption_bonus
+            
+                def calculate_reward(self, context: RewardContext) -> float:
+                    renewable_fraction = EnergyMetricsCalculator.calculate_renewable_fraction(
+                        context.system_balance
+                    )
+                    self_consumption_ratio = EnergyMetricsCalculator.calculate_self_consumption_ratio(
+                        context.system_balance
+                    )
+                    renewable_reward = renewable_fraction * self.renewable_bonus
+                    self_consumption_reward = (
+                        self_consumption_ratio * self.self_consumption_bonus
+                    )
+                    return renewable_reward + self_consumption_reward
+        __init__.py
+            from energysim.reward.layers.energy import (
+                EnergyRewardLayer,
+            )
+            from energysim.reward.layers.comfort import (
+                ComfortRewardLayer,
+            )
+            from energysim.reward.layers.efficiency import (
+                EfficiencyRewardLayer,
+            )
+            from energysim.reward.layers.grid import (
+                GridStabilityRewardLayer,
+            )
+            from energysim.reward.layers.base import RewardLayer
+            
+            __all__ = [
+                "RewardLayer",
+                "EnergyRewardLayer",
+                "ComfortRewardLayer",
+                "EfficiencyRewardLayer",
+                "GridStabilityRewardLayer",
+            ]
+        grid.py
+            from energysim.reward.layers.base import RewardLayer
+            from energysim.reward.contexts import RewardContext
+            
+            
+            class GridStabilityRewardLayer(RewardLayer):
+                """Grid stability reward layer."""
+            
+                def __init__(
+                    self,
+                    weight: float = 1.0,
+                    balance_tolerance: float = 1000.0,
+                    balance_bonus: float = 0.02,
+                    storage_bonus: float = 0.01,
+                    enabled: bool = True,
+                ):
+                    super().__init__(weight, enabled, "grid_stability")
+                    self.balance_tolerance = balance_tolerance
+                    self.balance_bonus = balance_bonus
+                    self.storage_bonus = storage_bonus
+            
+                def calculate_reward(self, context: RewardContext) -> float:
+                    reward = 0.0
+                    if (
+                        abs(context.system_balance.electrical_energy.net)
+                        < self.balance_tolerance
+                    ):
+                        reward += self.balance_bonus
+                    if context.system_balance.electrical_storage.soc is not None:
+                        if 0.2 <= context.system_balance.electrical_storage.soc <= 0.8:
+                            reward += self.storage_bonus
+                    return reward
+        comfort.py
+            from energysim.reward.layers.base import RewardLayer
+            from energysim.reward.contexts import (
+                RewardContext,
+            )
+            from energysim.reward.calculators import (
+                ComfortMetricsCalculator,
+            )
+            
+            
+            class ComfortRewardLayer(RewardLayer):
+                """Comfort reward layer without caching."""
+            
+                def __init__(
+                    self,
+                    weight: float = 1.0,
+                    temperature_comfort_band: float = 2.0,
+                    humidity_comfort_band: float = 0.1,
+                    max_penalty: float = 10.0,
+                    enabled: bool = True,
+                ):
+                    super().__init__(weight, enabled, "comfort")
+                    self.temperature_comfort_band = temperature_comfort_band
+                    self.humidity_comfort_band = humidity_comfort_band
+                    self.max_penalty = max_penalty
+            
+                def calculate_reward(self, context: RewardContext) -> float:
+                    comfort = context.thermal_state
+                    if (
+                        comfort.temperature_error <= self.temperature_comfort_band
+                        and comfort.humidity_error <= self.humidity_comfort_band
+                    ):
+                        return 0.0
+                    penalties = ComfortMetricsCalculator.calculate_comfort_penalty(
+                        comfort,
+                        self.temperature_comfort_band,
+                        self.humidity_comfort_band,
+                        self.max_penalty,
+                    )
+                    return -(penalties["temperature_penalty"] + penalties["humidity_penalty"])
+        __pycache__/

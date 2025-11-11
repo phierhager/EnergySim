@@ -20,36 +20,14 @@ dependencies = [
     "numpy",
     "pytest",
     "pandas",
-    "helics",
-    "dacite",
-    "pyyaml"
-]
-
-
-[project.optional-dependencies]
-cu118 = [
-    "torch==2.7.1+cu118",
-    "torchaudio==2.7.1+cu118", 
-    "torchvision==0.22.1+cu118",
-]
-cu126 = [
-    "torch==2.7.1+cu126",
-    "torchaudio==2.7.1+cu126",
-    "torchvision==0.22.1+cu126",
-]
-cu128 = [
-    "torch==2.7.1+cu128", 
-    "torchaudio==2.7.1+cu128",
-    "torchvision==0.22.1+cu128",
-]
-cpu = [
-    "torch==2.7.1",
-    "torchaudio==2.7.1", 
-    "torchvision==0.22.1",
+    "jax",
+    "jaxopt",
+    "equinox",
+    "flax"
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["energysim*"]
 
 
