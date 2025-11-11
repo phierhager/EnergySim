@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 import numpy as np
 
 from energysim.core.components.base import ComponentOutputs
-from energysim.core.thermal.thermal_model_base import ThermalState
+from energysim.core.thermal.base import ThermalState
 from energysim.core.components.spaces import (
     DictSpace,
     Space,
@@ -56,6 +56,16 @@ class ComponentSensorConfig:
 # -------------------------------
 # Component Sensor
 # -------------------------------
+
+@dataclass
+class ComponentSensorOutputs(TypedDict):
+    electrical_soc: Optional[float]
+    thermal_soc: Optional[float]
+    electrical_flow: Optional[float]
+    heating_flow: Optional[float]
+    cooling_flow: Optional[float]
+
+
 class ComponentSensor(Sensor):
     """Sensor for observing component/battery outputs."""
 
@@ -128,6 +138,12 @@ class ComponentSensor(Sensor):
 # -------------------------------
 # Thermal Sensor
 # -------------------------------
+class ThermalSensorOutputs(TypedDict):
+    temperature: Optional[float]
+    temperature_error: Optional[float]
+    comfort_violation: Optional[float]
+    zone_temperatures: Optional[dict[str, float]]
+    
 class ThermalSensor(Sensor):
     """Robust thermal sensor for single or multi-zone buildings."""
 
