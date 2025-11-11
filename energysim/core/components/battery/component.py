@@ -1,8 +1,8 @@
-from energysim.core.components.battery.model import (
+from energysim.core.components.battery.models import (
     BatteryModelBase,
 )
-from energysim.core.components.base import ComponentBase
-from energysim.core.components.spaces import ContinuousSpace, DictSpace
+from energysim.core.components.base import ActionDrivenComponent
+from energysim.core.shared.spaces import ContinuousSpace, DictSpace
 from energysim.core.components.base import (
     ComponentOutputs,
 )
@@ -14,7 +14,7 @@ from energysim.core.components.battery.config import (
 
 
 @register_component(BatteryComponentConfig)
-class Battery(ComponentBase):
+class Battery(ActionDrivenComponent):
     def __init__(self, model: BatteryModelBase):
         self._model = model
         self._initialized = False

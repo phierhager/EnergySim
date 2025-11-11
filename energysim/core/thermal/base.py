@@ -3,6 +3,8 @@ from dataclasses import asdict
 from typing import Any, Dict, Optional
 from energysim.core.thermal.config import ThermalModelConfig
 from energysim.core.thermal.state import ThermalState
+from energysim.core.shared.mpc_interfaces import MPCBuilderBase
+import casadi as ca
 
 class ThermalModel(ABC):
     """
@@ -72,16 +74,12 @@ class ThermalModel(ABC):
         )
         return temp_diff * thermal_capacity
 
-    def get_observations(self) -> Dict[str, Any]:
-        """Get thermal state as dictionary for observations."""
-        return {
-            "temperature": self.state.temperature,
-            "temperature_setpoint": self.state.temperature_setpoint,
-            "temperature_error": self.state.temperature_error,
-            "heating_demand": self.state.heating_demand,
-            "cooling_demand": self.state.cooling_demand,
-        }
+    def get_mpc_state_variables(self, builder: MPCBuilderBase) -> list[ca.SX]:
+        temp = builder.opti.variable(1)
+        builder.set_initial_state('room_temp', temp)
+        return [temp]
 
-    def get_state_dict(self) -> Dict[str, float]:
-        """Get thermal state as dictionary for internal use."""
-        return asdict(self.state)
+    def get_mpc_action_variables(self, builder: MPCBuilderBase) -> list[ca.SX]:
+        # This is NOT needed if the HVAC/Boiler is another component 
+        # (which is correct in a component-based design)
+        return []

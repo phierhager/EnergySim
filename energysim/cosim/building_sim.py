@@ -4,10 +4,10 @@ from typing import Dict, Mapping, Optional, Any, Union, TypedDict
 import numpy as np
 import logging
 
-from energysim.core.components.base import ComponentBase
+from energysim.core.components.base import ActionDrivenComponent, ComponentBase, StateAwareComponent
 from energysim.core.components.outputs import ComponentOutputs, ElectricalEnergy
-from energysim.core.components.sensors import ComponentSensor, Sensor
-from energysim.core.components.spaces import DictSpace, Space
+from energysim.core.components.sensors import ComponentSensor, Sensor, ComponentSensorOutputs, ThermalSensorOutputs
+from energysim.core.shared.spaces import DictSpace, Space
 from energysim.core.thermal.state import ThermalState
 from energysim.core.thermal.models import ThermalModel
 from energysim.core.data.dataset import EnergyDataset
@@ -17,9 +17,9 @@ from energysim.core.components.sensors import ComponentSensorConfig
 logger = logging.getLogger(__name__)
 
 class ObservationDict(TypedDict):
-    thermal: dict[str, dict[str, float]]
+    thermal: dict[str, ThermalSensorOutputs]
     data: dict[str, np.ndarray]
-    components: dict[str, dict[str, float]]
+    components: dict[str, ComponentSensorOutputs]
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,18 +191,22 @@ class BuildingSimulator:
         for name, component in self.components.items():
             if name not in action:
                 raise ValueError(f"Missing action for component '{name}' in step().")
-            endogenous_outputs[name] = component.advance(
-                action=action[name],
-                state=current_state,
-                dt_seconds=dt_seconds
-            )
+            if isinstance(component, ActionDrivenComponent):
+                endogenous_outputs[name] = component.advance(
+                    action=action[name],
+                    dt_seconds=dt_seconds
+                )
+            elif isinstance(component, StateAwareComponent):
+                endogenous_outputs[name] = component.advance(
+                    action=action[name],
+                    state=current_state,
+                    dt_seconds=dt_seconds
+                )
+
         # Include any external endogenous component outputs
         if external_component_outputs is not None:
             for k, v in external_component_outputs.items():
                 endogenous_outputs[f"external_{k}"] = v
-            for k in external_component_outputs.keys():
-                if f"external_{k}" not in self.comp_sensors:
-                    self.comp_sensors[f"external_{k}"] = self.external_sensor
 
         # --- PHASE 3: System Balancing & Finalization ---
         # Aggregate computed endogenous flows with given exogenous flows

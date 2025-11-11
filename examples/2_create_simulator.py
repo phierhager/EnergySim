@@ -9,6 +9,7 @@ with open("config/env_config.yaml", "r") as file:
 
 building_sim_config = dacite.from_dict(BuildingSimulationConfig, yaml_cfg)
 print("Building simulation configuration loaded successfully.")
+print("Configuration details:", building_sim_config)
 
 simulator = SimulatorFactory.create_simulator(building_sim_config)
 print("Building simulator created successfully.")

@@ -1,9 +1,9 @@
 """Calculation services for extracting KPIs from domain objects."""
 
 
-from energysim.core.thermal.thermal_model_base import ThermalState
+from energysim.core.thermal.base import ThermalState
 from energysim.core.components.outputs import ComponentOutputs
-from energysim.rl.rewards.metrics import (
+from energysim.reward.metrics import (
     EnergyMetrics,
     EfficiencyMetrics,
     PeakDemandMetrics,

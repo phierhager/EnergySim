@@ -54,10 +54,14 @@ class ElectricalStorage:
     def __post_init__(self):
         if not (0.0 <= self.soc <= 1.0):
             raise ValueError("State of Charge (soc) must be between 0 and 1.")
-        if self.capacity <= 0.0:
-            raise ValueError("Capacity must be greater than 0.")
+        if self.capacity < 0.0:
+            raise ValueError("Capacity must be greater or equal than 0.")
+        if self.capacity == 0.0 and self.soc != 0.0:
+            raise ValueError("If capacity is 0, soc must also be 0.")
 
     def __add__(self, other: "ElectricalStorage") -> "ElectricalStorage":
+        if (self.capacity + other.capacity) == 0:
+            return ElectricalStorage(capacity=0.0, soc=0.0)
         return ElectricalStorage(
             capacity=self.capacity + other.capacity,
             soc=(self.soc * self.capacity + other.soc * other.capacity)
@@ -73,12 +77,14 @@ class ThermalStorage:
     def __post_init__(self):
         if not (0.0 <= self.soc <= 1.0):
             raise ValueError("State of Charge (soc) must be between 0 and 1.")
-        if self.capacity <= 0.0:
-            raise ValueError("Capacity must be greater than 0.")
+        if self.capacity < 0.0:
+            raise ValueError("Capacity must be greater or equal than 0.")
+        if self.capacity == 0.0 and self.soc != 0.0:
+            raise ValueError("If capacity is 0, soc must also be 0.")
 
     def __add__(self, other: "ThermalStorage") -> "ThermalStorage":
         if (self.capacity + other.capacity) == 0:
-            raise ValueError("Cannot add ThermalStorage with zero total capacity.")
+            return ThermalStorage(capacity=0.0, soc=0.0)
         return ThermalStorage(
             capacity=self.capacity + other.capacity,
             soc=(self.soc * self.capacity + other.soc * other.capacity)

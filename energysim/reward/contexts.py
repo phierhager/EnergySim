@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from energysim.core.components.outputs import ComponentOutputs
 from energysim.core.state import SimulationState
-from energysim.core.thermal.thermal_model_base import ThermalState
+from energysim.core.thermal.base import ThermalState
 
 @dataclass
 class RewardContext:

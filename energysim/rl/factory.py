@@ -1,13 +1,13 @@
 from typing import Dict
 from dataclasses import dataclass
 
-from energysim.core.thermal.thermal_model_base import (
+from energysim.core.thermal.base import (
     ThermalModelConfig,
 )
 from energysim.rl.building_environment import (
     EnvironmentParameters,
 )
-from energysim.rl.rewards.factory import RewardManagerFactory
+from energysim.reward.factory import RewardManagerFactory
 from energysim.rl.building_environment import (
     BuildingEnvironment,
 )
@@ -17,7 +17,7 @@ from energysim.core.components.sensors import (
     ComponentSensor,
 )
 from energysim.core.data.config import EnergyDatasetConfig
-from energysim.rl.rewards.reward_config import EconomicConfig, RewardConfig
+from energysim.reward.config import EconomicConfig, RewardConfig
 from energysim.core.components.config_types import ComponentConfig
 from energysim.core.components.factory import build_component
 from energysim.core.thermal.factory import build_thermal_model

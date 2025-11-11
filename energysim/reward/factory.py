@@ -2,20 +2,20 @@
 
 import logging
 
-from energysim.rl.rewards.layers import (
+from energysim.reward.layers import (
     EnergyRewardLayer,
     ComfortRewardLayer,
     EfficiencyRewardLayer,
     GridStabilityRewardLayer,
 )
-from energysim.rl.rewards.manager import RewardManager
-from energysim.rl.rewards.reward_config import EconomicConfig, RewardConfig
+from energysim.reward.manager import RewardManager
+from energysim.reward.config import EconomicConfig, RewardConfig
+
+logger = logging.getLogger(__name__)
 
 
 class RewardManagerFactory:
     """Class-level factory for creating RewardManager instances."""
-
-    logger = logging.getLogger("RewardManagerFactory")
 
     @classmethod
     def create(
@@ -37,7 +37,7 @@ class RewardManagerFactory:
         if config.energy_weight > 0:
             energy_layer = EnergyRewardLayer(weight=config.energy_weight, economic_config=economic_config, enabled=True)
             manager.add_layer(energy_layer, "energy")
-            cls.logger.info(f"Added energy layer with weight {config.energy_weight}")
+            logger.info(f"Added energy layer with weight {config.energy_weight}")
 
         # Comfort layer
         if config.comfort_weight > 0:
@@ -49,7 +49,7 @@ class RewardManagerFactory:
                 enabled=True,
             )
             manager.add_layer(comfort_layer, "comfort")
-            cls.logger.info(f"Added comfort layer with weight {config.comfort_weight}")
+            logger.info(f"Added comfort layer with weight {config.comfort_weight}")
 
         # Efficiency layer
         if config.efficiency_weight > 0:
@@ -60,7 +60,7 @@ class RewardManagerFactory:
                 enabled=True,
             )
             manager.add_layer(efficiency_layer, "efficiency")
-            cls.logger.info(
+            logger.info(
                 f"Added efficiency layer with weight {config.efficiency_weight}"
             )
 
@@ -74,7 +74,7 @@ class RewardManagerFactory:
                 enabled=True,
             )
             manager.add_layer(grid_layer, "grid_stability")
-            cls.logger.info(
+            logger.info(
                 f"Added grid stability layer with weight {config.grid_stability_weight}"
             )
 

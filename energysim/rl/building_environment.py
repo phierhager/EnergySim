@@ -8,14 +8,14 @@ from energysim.core.components.outputs import (
     ElectricalEnergy,
 )
 from energysim.core.thermal.state import ThermalState
-from energysim.core.thermal.thermal_model_base import ThermalModel
+from energysim.core.thermal.base import ThermalModel
 from energysim.core.data.dataset import EnergyDataset
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
-from energysim.rl.rewards.contexts import (
+from energysim.reward.contexts import (
     RewardContext,
 )
-from energysim.rl.rewards.manager import RewardManager
+from energysim.reward.manager import RewardManager
 from energysim.core.components.sensors import Sensor
 from energysim.core.state import SimulationState
 from energysim.rl.data_column import DataColumn

@@ -1,4 +1,5 @@
-from energysim.core.thermal.thermal_model_base import (
+from energysim.core.shared.mpc_interfaces import MPCBuilderBase
+from energysim.core.thermal.base import (
     ThermalModel,
     ThermalState,
 )
@@ -65,3 +66,34 @@ class SimpleAirModel(ThermalModel):
             temperature_setpoint=self.config.temperature_setpoint,
         )
         return self.state
+
+    def add_mpc_dynamics_constraints(self, builder: MPCBuilderBase, k: int, states, actions, exogenous):
+        # T_air(k+1) = f(T_air(k), Q_hvac, T_ambient)
+        T_k = states['room_temp'][k]
+        T_k_plus_1 = states['room_temp'][k+1]
+        T_amb = exogenous['ambient_temperature'][k] # from forecast
+
+        # The thermal input is a calculated value from the component actions
+        # e.g., Q_hvac_j is a symbolic expression derived in SystemDynamics (or passed here)
+        # Assuming Q_hvac_j is computed from actions['hvac_power'][k]
+        # Q_hvac_j = actions['hvac_power'][k] * builder.dt_seconds * HVAC_COP_k
+
+        # This requires a *coupling variable* or explicit knowledge of the thermal energy input
+        # from all components (hvac, stove, etc.) in the thermal model.
+
+        # For simplicity, let's assume one coupling variable:
+        Q_net_thermal = builder.coupling_vars['net_thermal_energy'][k] # Must be defined earlier
+
+        # Symbolic ODE for SimpleAirModel (discretized Euler)
+        C_therm = self.air_mass * self.config.specific_heat_air
+        R_therm = 1.0 / self.config.heat_transfer_coefficient # R = 1/U-value
+
+        dT = (Q_net_thermal / C_therm) - ((T_k - T_amb) * builder.dt_seconds / (R_therm * C_therm))
+        builder.add_constraint(T_k_plus_1 == T_k + dT)
+
+    def add_mpc_operational_constraints(self, builder, k, states, actions, exogenous):
+         # Comfort bounds
+         T_max = builder.get_param('T_max')
+         T_min = builder.get_param('T_min')
+         builder.add_constraint(states['room_temp'][k] <= T_max)
+         builder.add_constraint(states['room_temp'][k] >= T_min)

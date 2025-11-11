@@ -1,16 +1,16 @@
-from energysim.rl.rewards.layers.energy import (
+from energysim.reward.layers.energy import (
     EnergyRewardLayer,
 )
-from energysim.rl.rewards.layers.comfort import (
+from energysim.reward.layers.comfort import (
     ComfortRewardLayer,
 )
-from energysim.rl.rewards.layers.efficiency import (
+from energysim.reward.layers.efficiency import (
     EfficiencyRewardLayer,
 )
-from energysim.rl.rewards.layers.grid import (
+from energysim.reward.layers.grid import (
     GridStabilityRewardLayer,
 )
-from energysim.rl.rewards.layers.base import RewardLayer
+from energysim.reward.layers.base import RewardLayer
 
 __all__ = [
     "RewardLayer",

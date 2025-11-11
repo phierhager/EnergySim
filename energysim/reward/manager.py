@@ -1,6 +1,6 @@
 from typing import Dict, Optional
-from energysim.rl.rewards.contexts import RewardContext
-from energysim.rl.rewards.layers import RewardLayer
+from energysim.reward.contexts import RewardContext
+from energysim.reward.layers import RewardLayer
 
 
 class RewardManager:

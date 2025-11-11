@@ -1,4 +1,4 @@
-from energysim.core.thermal.thermal_model_base import (
+from energysim.core.thermal.base import (
     ThermalModel,
     ThermalModelConfig,
 )

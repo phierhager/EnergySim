@@ -1,6 +1,6 @@
-from energysim.rl.rewards.layers.base import RewardLayer
-from energysim.rl.rewards.contexts import RewardContext
-from energysim.rl.rewards.calculators import (
+from energysim.reward.layers.base import RewardLayer
+from energysim.reward.contexts import RewardContext
+from energysim.reward.calculators import (
     EnergyMetricsCalculator,
 )
 

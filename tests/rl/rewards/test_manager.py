@@ -1,8 +1,8 @@
 """Tests for reward manager implementation."""
 from unittest.mock import Mock
-from energysim.rl.rewards.manager import RewardManager
-from energysim.rl.rewards.layers.base import RewardLayer
-from energysim.rl.rewards.contexts import RewardContext
+from energysim.reward.manager import RewardManager
+from energysim.reward.layers.base import RewardLayer
+from energysim.reward.contexts import RewardContext
 
 
 class MockRewardLayer(RewardLayer):
