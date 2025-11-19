@@ -31,7 +31,8 @@ class SimulationDataset:
         
         # --- Weather ---
         self.ambient_temp = load_col_or_zeros(ExoKey.AMBIENT_TEMP)
-        self.solar_irradiance_w_m2 = load_col_or_zeros(ExoKey.SOLAR_IRRADIANCE) # <--- RENAMED
+        self.solar_dni_w_m2 = load_col_or_zeros(ExoKey.SOLAR_DNI_W_M2)
+        self.solar_dhi_w_m2 = load_col_or_zeros(ExoKey.SOLAR_DHI_W_M2)
         self.wind_speed_m_s = load_col_or_zeros(ExoKey.WIND_SPEED_M_S)
         
         # --- Price ---
@@ -39,10 +40,6 @@ class SimulationDataset:
         
         # --- Loads ---
         self.base_load_w = load_col_or_zeros(ExoKey.LOAD) # <--- RENAMED
-        
-        # --- Thermal Gains ---
-        self.occupancy_gains_w = load_col_or_zeros(ExoKey.INTERNAL_GAINS_W)
-        self.solar_gains_w = load_col_or_zeros(ExoKey.SOLAR_GAINS_W)
 
         # --- Time ---
         dt_series = pd.to_datetime(df[ExoKey.TIME])
@@ -60,7 +57,8 @@ class SimulationDataset:
         return ExogenousData(
             # --- Weather ---
             ambient_temp=jnp.array(self.ambient_temp[idx]),
-            solar_irradiance_w_m2=jnp.array(self.solar_irradiance_w_m2[idx]),
+            solar_dni_w_m2=jnp.array(self.solar_dni_w_m2[idx]),
+            solar_dhi_w_m2=jnp.array(self.solar_dhi_w_m2[idx]),
             wind_speed_m_s=jnp.array(self.wind_speed_m_s[idx]),
             # --- Time ---
             time_of_year_seconds=jnp.array(self.time_of_year_seconds[idx]),
@@ -68,28 +66,17 @@ class SimulationDataset:
             price=jnp.array(self.price[idx]),
             # --- Loads ---
             base_load_w=jnp.array(self.base_load_w[idx]),
-            ev_charger_load_w=jnp.array(0.0),
-            dishwasher_load_w=jnp.array(0.0),
-            clothes_dryer_load_w=jnp.array(0.0),
-            water_heater_load_w=jnp.array(0.0),
-            cooking_load_w=jnp.array(0.0),
-            # --- Thermal Gains ---
-            occupancy_gains_w=jnp.array(self.occupancy_gains_w[idx]),
-            solar_gains_w=jnp.array(self.solar_gains_w[idx]),
-            device_gains_w=jnp.array(0.0)
         )
 
     def get_forecast(self, start_idx: int, horizon: int) -> ExogenousData:
         """Returns a slice of data for MPC forecasts."""
         s = slice(start_idx, start_idx + horizon)
         
-        # Create zero arrays for all behavioral/calculated fields
-        zeros = jnp.zeros(horizon)
-        
         return ExogenousData(
             # --- Weather ---
             ambient_temp=jnp.array(self.ambient_temp[s]),
-            solar_irradiance_w_m2=jnp.array(self.solar_irradiance_w_m2[s]),
+            solar_dni_w_m2=jnp.array(self.solar_dni_w_m2[s]),
+            solar_dhi_w_m2=jnp.array(self.solar_dhi_w_m2[s]),
             wind_speed_m_s=jnp.array(self.wind_speed_m_s[s]),
             # --- Time ---
             time_of_year_seconds=jnp.array(self.time_of_year_seconds[s]),
@@ -97,13 +84,4 @@ class SimulationDataset:
             price=jnp.array(self.price[s]),
             # --- Loads ---
             base_load_w=jnp.array(self.base_load_w[s]),
-            ev_charger_load_w=zeros,
-            dishwasher_load_w=zeros,
-            clothes_dryer_load_w=zeros,
-            water_heater_load_w=zeros,
-            cooking_load_w=zeros,
-            # --- Thermal Gains ---
-            occupancy_gains_w=jnp.array(self.occupancy_gains_w[s]),
-            solar_gains_w=jnp.array(self.solar_gains_w[s]),
-            device_gains_w=zeros
         )

@@ -19,8 +19,7 @@ class ExoKey(StrEnum):
     TIME = "timestamp"
     AMBIENT_TEMP = "ambient_temp"
     LOAD = "load"                         # (W) Non-controllable electrical load
-    SOLAR_IRRADIANCE = "solar_irradiance_w_m2" # (W/m^2) Solar irradiance input
     PRICE = "price"                       # (€/kWh)
-    INTERNAL_GAINS_W = "internal_gains_w" # (e.g., people, computers)
-    SOLAR_GAINS_W = "solar_gains_w"       # (e.g., direct sunlight)
+    SOLAR_DNI_W_M2 = "solar_dni_w_m2"     # (W/m^2) Direct Normal Irradiance
+    SOLAR_DHI_W_M2 = "solar_dhi_w_m2"     # (W/m^2) Diffuse Horizontal Irradiance
     WIND_SPEED_M_S = "wind_speed_m_s"           # (m/s) Wind speed for infiltration modeling

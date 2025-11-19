@@ -2,6 +2,117 @@ import jax.numpy as jnp
 import equinox as eqx
 from dataclasses import field
 from typing import Literal, Tuple
+import dataclasses
+from typing import List, Dict, Optional
+import jax.numpy as jnp
+
+class ApplianceConfig(eqx.Module):
+    """
+    Unified configuration for ALL appliances (Smart or Dumb).
+    """
+    name: str = eqx.field(static=True)
+    target_node_name: str = eqx.field(static=True)
+    
+    # Physical Props
+    nominal_power_w: float = eqx.field(static=True)
+    convective_fraction: float = eqx.field(static=True)
+    metabolic_heat_w: float = eqx.field(static=True, default=0.0)
+
+    # --- Smart Params (Optional) ---
+    # If these are set, the Factory treats it as a ShiftableLoadModel
+    cycle_energy_kwh: Optional[float] = eqx.field(static=True, default=None)
+    
+    @property
+    def total_energy_j(self):
+        if self.cycle_energy_kwh is None:
+            return 0.0
+        return self.cycle_energy_kwh * 3.6e6
+
+class ComponentState(eqx.Module):
+    """
+    State passed from the Behavioral Model to the Simulator.
+    0.0 = Off/Absent, 1.0 = On/Present.
+    Can be fractional (e.g., 0.5 speed or 0.5 probability).
+    """
+    activation: jnp.ndarray  # Shape: (n_appliances,)
+
+@dataclasses.dataclass
+class Material:
+    name: str
+    conductivity: float
+    density: float
+    specific_heat: float
+    thickness: float
+    absorptivity: float # Default solar absorptivity
+    
+    @property
+    def R_value(self): return self.thickness / self.conductivity
+    @property
+    def C_area_density(self): return self.thickness * self.density * self.specific_heat
+
+@dataclasses.dataclass
+class Surface:
+    name: str
+    zone_name: str
+    type: str # 'WALL', 'ROOF', 'FLOOR', 'WINDOW'
+    area: float
+    azimuth: float 
+    tilt: float
+    construction_name: str
+    boundary_condition: str 
+    
+    # New Physics Properties
+    roughness: str = "Medium" # Maps to SurfaceRoughness enum
+    absorptivity_solar: float = 0.7 # For Opaque (0.0-1.0)
+    emissivity_longwave: float = 0.9 # For IR exchange (0.0-1.0)
+    
+    @property
+    def normal(self):
+        """Returns 3D normal vector [x, y, z] for solar calc."""
+        # Simplified conversion from azimuth/tilt to vector
+        rad_az = jnp.radians(self.azimuth)
+        rad_tilt = jnp.radians(self.tilt)
+        
+        x = jnp.sin(rad_tilt) * jnp.sin(rad_az)
+        y = jnp.sin(rad_tilt) * jnp.cos(rad_az)
+        z = jnp.cos(rad_tilt)
+        return jnp.array([x, y, z])
+    
+@dataclasses.dataclass
+class WindowType:
+    name: str
+    u_value: float       # Datasheet Overall U-value (W/m2K)
+    shgc: float         # Solar Heat Gain Coefficient
+    
+    # New physical properties
+    glass_thickness: float = 0.006  # m (Total glass thickness, e.g. 3mm + 3mm)
+    density: float = 2500.0         # kg/m3 (Standard glass)
+    specific_heat: float = 840.0    # J/kgK
+    
+    def calculate_properties(self):
+        """
+        Decomposes datasheet U-value into physical layer resistance.
+        1/U_total = 1/h_ext + R_glazing + 1/h_int
+        We solve for R_glazing to use in our dynamic model.
+        """
+        # Standard reference conditions for U-value rating (NFRC/ISO)
+        h_ext_ref = 23.0 # W/m2K
+        h_int_ref = 8.3  # W/m2K
+        
+        R_total_ref = 1.0 / self.u_value
+        
+        # R_glazing includes the glass conduction AND the gas gap
+        self.R_glazing_layer = R_total_ref - (1.0/h_ext_ref) - (1.0/h_int_ref)
+        
+        # Safety clamp (in case U-value is terrible or physics break)
+        self.R_glazing_layer = max(self.R_glazing_layer, 0.001)
+        
+        # Estimate split between Transmission and Absorption based on SHGC
+        # Simplify: Transmissivity ~ SHGC * 0.85, Absorptivity ~ The rest
+        # (Real EnergyPlus does this spectrally, this is a heuristic)
+        self.transmissivity = self.shgc * 0.85
+        self.absorptivity = self.shgc * 0.15  # Absorbed in the outer pane mostly
+
 
 # Define array type for clarity
 Array = jnp.ndarray
@@ -10,35 +121,45 @@ Array = jnp.ndarray
 # 1. Configuration Modules (Static/Physics)
 # ==========================================
 
+# Assuming this code replaces the ThermalConfig class in your data_structs.py (or similar file)
+
 class ThermalConfig(eqx.Module):
     """
     Configuration for a full RC-Network thermal model.
     """
     # --- 1. The Matrices (Dynamic Leaves) ---
-    # In Equinox, arrays should generally NOT be static if you want 
-    # to differentiate through them or use them in calculations.
     A_matrix: Array
     C_inv_vector: Array
     B_matrix: Array
 
     # --- 2. Node Indices (Static) ---
-    # Integers used for indexing must be static to trace correctly in JIT.
     ambient_air_index: int = eqx.field(static=True)
+    ground_node_index: int = eqx.field(static=True)
     room_air_indices: Tuple[int, ...] = eqx.field(static=True)
     wall_indices: Tuple[int, ...] = eqx.field(static=True)
     mass_indices: Tuple[int, ...] = eqx.field(static=True)
 
-    # --- 3. Coupling Indices (Static) ---
+    # --- 3. Metadata (Static) ---
+    node_names: List[str] = eqx.field(static=True)
+    node_map: Dict[str, int] = eqx.field(static=True)
+    input_map: Dict[str, Dict[str, int]] = eqx.field(static=True)
+
+    # --- 4. B-Matrix Column Indices (CRITICAL for decoupled step) ---
+    # These arrays hold the column index in B_matrix corresponding to each room's action.
+    u_idx_heating: Array = eqx.field(static=True) # Shape (n_rooms,)
+    u_idx_cooling: Array = eqx.field(static=True) # Shape (n_rooms,)
+    
+    # --- 5. Coupling Indices (Static) ---
     waste_heat_node_index: int = eqx.field(static=True, default=-1)
 
-    # --- 4. Infiltration Parameters (Static/Hyperparams) ---
+    # --- 6. Infiltration Parameters (Static/Hyperparams) ---
     use_dynamic_infiltration: bool = eqx.field(static=True, default=False)
     inf_k1: float = eqx.field(static=True, default=0.1)
     inf_k2: float = eqx.field(static=True, default=0.0)
     inf_k3: float = eqx.field(static=True, default=0.0)
     room_vol_m3: float = eqx.field(static=True, default=0.0)
 
-    # --- 5. Cost/Control Parameters (Static) ---
+    # --- 7. Cost/Control Parameters (Static) ---
     setpoint: float = eqx.field(static=True, default=21.0)
     comfort_band: float = eqx.field(static=True, default=1.0)
     model_type: str = eqx.field(static=True, default="RCNetwork")
@@ -198,31 +319,32 @@ class SystemState(eqx.Module):
 class ExogenousData(eqx.Module):
     # Weather
     ambient_temp: Array
-    solar_irradiance_w_m2: Array
+    solar_dni_w_m2: jnp.ndarray       # Direct Normal
+    solar_dhi_w_m2: jnp.ndarray       # Diffuse Horizontal
     wind_speed_m_s: Array
     time_of_year_seconds: Array 
 
     # Price
     price: Array
+    carbon_intensity: float
 
     # Loads (W)
     base_load_w: Array
-    ev_charger_load_w: Array
-    dishwasher_load_w: Array
-    clothes_dryer_load_w: Array
-    water_heater_load_w: Array
-    cooking_load_w: Array
 
-    # Thermal Gains (W)
-    occupancy_gains_w: Array
-    solar_gains_w: Array
-    device_gains_w: Array
+    # Appliance Profiles
+    # For Smart devices, this might be 0.0 (or it will be ignored by the mask).
+    appliance_profiles: jnp.ndarray # Shape: (n_appliances,)
 
 class SystemActions(eqx.Module):
-    battery_power_w: Array      
-    heat_pump_power_w: Array    
-    ac_power_w: Array           
-    storage_discharge_w: Array  
+    """
+    Control Actions (Thermostat & Battery).
+    """
+    heat_pump_power_w: jnp.ndarray  # Per room (if mapped) or global
+    ac_power_w: jnp.ndarray
+    battery_power_w: jnp.ndarray    # +Charge, -Discharge
+    storage_discharge_w: jnp.ndarray 
+    # For Passive devices, the agent should output 0.0 (or it will be ignored by the mask).
+    appliance_signals: jnp.ndarray  # Shape: (n_appliances,)
 
 class HeatPumpOutput(eqx.Module):
     thermal_power_w: Array     

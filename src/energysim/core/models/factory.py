@@ -28,11 +28,14 @@ from energysim.core.models.forecaster import (
     AbstractForecaster, GaussianNoiseForecaster, 
     AR1Forecaster, ForecastConfig
     )
+from energysim.core.models.appliance_model import (
+    AbstractApplianceModel, PassiveApplianceModel, ShiftableLoadModel
+)
 
 
 # Import configs and dummies
 from energysim.core.shared.data_structs import (
-    BatteryConfig, ThermalConfig, HeatPumpConfig,
+    ApplianceConfig, BatteryConfig, ThermalConfig, HeatPumpConfig,
     AirConditionerConfig, ThermalStorageConfig,
     SolarConfig, GridThermalStorageConfig
 )
@@ -133,3 +136,43 @@ def create_forecaster(config: Optional[ForecastConfig] = None) -> AbstractForeca
         return AR1Forecaster(config)
     else:
         raise ValueError(f"Unknown forecaster type: {config.model_type}")
+    
+
+def create_appliances(
+    app_configs: list[ApplianceConfig], 
+    node_map: dict[str, int]
+) -> list[AbstractApplianceModel]:
+    """
+    Factory that creates the appropriate model (Smart or Passive) based on config.
+    """
+    models = []
+    
+    for app in app_configs:
+        # 1. Resolve Topology
+        if app.target_node_name in node_map:
+            target_idx = node_map[app.target_node_name]
+        else:
+             # Default to ambient or raise error. 
+             # Using 0 ensures code doesn't crash, but raising error is better for config debugging.
+            raise ValueError(f"Unknown node '{app.target_node_name}' for appliance '{app.name}'")
+
+        # 2. Dispatch
+        # If 'cycle_energy_kwh' is defined and > 0, it's a Smart Load (EV, Washer).
+        # Otherwise, it's a Passive Load (Lights, Fridge, People).
+        
+        if app.cycle_energy_kwh is not None and app.cycle_energy_kwh > 0:
+            # SMART
+            model = ShiftableLoadModel(
+                config=app, 
+                target_node_index=target_idx
+            )
+        else:
+            # DUMB (Passive)
+            model = PassiveApplianceModel(
+                config=app,
+                target_node_index=target_idx
+            )
+            
+        models.append(model)
+
+    return models

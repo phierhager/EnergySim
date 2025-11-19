@@ -56,39 +56,34 @@ def _calculate_slew_penalty(current_w: Array, prev_w: Array, weight: float = 0.0
 def f_cost_step(
     state: SystemState,
     actions: SystemActions,
-    prev_actions: SystemActions, # <--- NEW: Required for Slew Rate
+    prev_actions: SystemActions,
     exogenous: ExogenousData,
     hp_output: HeatPumpOutput,
     ac_output: AirConditionerOutput,
     storage_output: ThermalStorageOutput,
     solar_output: SolarOutput,
     configs: tuple[ThermalConfig, BatteryConfig, RewardConfig, HeatPumpConfig, AirConditionerConfig, ThermalStorageConfig, SolarConfig],
+    smart_appliance_load_w: float,
     dt_seconds: float
 ) -> Array:
     """
-    Calculates the total cost for a single timestep, including robustness terms.
+    Calculates the total cost for a single timestep.
     """
     t_conf, b_conf, r_conf, hp_conf, ac_conf, ts_conf, s_conf = configs
 
     # ==========================================
     # 1. Economic Cost (Electricity Bill)
     # ==========================================
-    
-    # Sum electrical loads
+
     hp_electrical_power_w = jnp.sum(hp_output.electrical_power_w)
     ac_electrical_power_w = jnp.sum(ac_output.electrical_power_w)
-    
-    total_load_w = (
-        exogenous.base_load_w
-        + exogenous.ev_charger_load_w
-        + exogenous.dishwasher_load_w
-        + exogenous.clothes_dryer_load_w
-        + exogenous.water_heater_load_w
-        + exogenous.cooking_load_w
-    )
+
+    # The 'base_load_w' in exogenous comes from the dataset (lights, cooking, etc.)
+    # We add the dynamic 'smart_appliance_load_w' (EVs, etc.) calculated in the sim.
+    total_uncontrollable_load_w = exogenous.base_load_w + smart_appliance_load_w
 
     net_grid_power_w = (
-        total_load_w
+        total_uncontrollable_load_w
         + actions.battery_power_w    # + = charging (buying)
         + hp_electrical_power_w
         + ac_electrical_power_w
@@ -96,69 +91,57 @@ def f_cost_step(
     )
 
     net_grid_energy_kwh = (net_grid_power_w * (dt_seconds / 3600.0)) / 1000.0
-    
-    # Simple Tariff: cost = energy * price
-    # (Ideally, feed-in tariff is lower, but we stick to simple import cost for now)
-    cost_euros = jnp.fmax(0.0, net_grid_energy_kwh) * exogenous.price
 
+    # Simple Import Tariff
+    cost_euros = jnp.fmax(0.0, net_grid_energy_kwh) * exogenous.price
 
     # ==========================================
     # 2. Comfort Cost (Thermal Violation)
     # ==========================================
-    
+
     T_vector = state.thermal.T_vector
     room_temps = T_vector[jnp.array(t_conf.room_air_indices)]
-    
-    temp_error = room_temps - t_conf.setpoint
-    # Penalty activates only outside the band
-    comfort_violation = jnp.fmax(0.0, jnp.abs(temp_error) - t_conf.comfort_band)
-    
-    # Quadratic penalty for smoothness
-    total_comfort_penalty = jnp.sum(comfort_violation**2)
 
+    temp_error = room_temps - t_conf.setpoint
+    comfort_violation = jnp.fmax(0.0, jnp.abs(temp_error) - t_conf.comfort_band)
+    total_comfort_penalty = jnp.sum(comfort_violation**2)
 
     # ==========================================
     # 3. Waste Penalty (System Efficiency)
     # ==========================================
-    
+    # Penalize dumping heat (e.g. charging thermal storage when full)
     total_rejected_heat_w = jnp.sum(storage_output.rejected_heat_w)
     rejected_heat_kwh = (total_rejected_heat_w * (dt_seconds / 3600.0)) / 1000.0
-    # We price waste at the current electricity price (opportunity cost)
     waste_penalty = rejected_heat_kwh * exogenous.price
 
-
     # ==========================================
-    # 4. Robustness: Soft Constraints (MIP-lite)
+    # 4. Robustness: Soft Constraints
     # ==========================================
     
-    # A. Heat Pump Deadband
-    # Prevents the solver from requesting 10W if the min power is 500W.
+    # Heat Pump Deadband (Prevent micro-cycling)
     hp_deadband_cost = _calculate_deadband_penalty(
-        actions.heat_pump_power_w, 
-        hp_conf.min_electrical_power_w, 
-        weight=10.0 # High weight to enforce hardware constraint
-    )
-    
-    # B. AC Deadband
-    ac_deadband_cost = _calculate_deadband_penalty(
-        actions.ac_power_w, 
-        ac_conf.min_electrical_power_w, 
+        actions.heat_pump_power_w,
+        hp_conf.min_electrical_power_w,
         weight=10.0
     )
-    
-    # C. Slew Rate (Switching Cost)
-    # Discourages rapid changes in power setpoints.
+
+    # AC Deadband
+    ac_deadband_cost = _calculate_deadband_penalty(
+        actions.ac_power_w,
+        ac_conf.min_electrical_power_w,
+        weight=10.0
+    )
+
+    # Slew Rate (Prevent rapid switching)
     slew_cost = (
         _calculate_slew_penalty(actions.heat_pump_power_w, prev_actions.heat_pump_power_w) +
         _calculate_slew_penalty(actions.ac_power_w, prev_actions.ac_power_w) +
         _calculate_slew_penalty(actions.battery_power_w, prev_actions.battery_power_w)
     )
 
-
     # ==========================================
     # 5. Total Weighted Objective
     # ==========================================
-    
     total_cost = (
         (cost_euros * r_conf.price_weight) +
         (total_comfort_penalty * r_conf.comfort_weight) +
