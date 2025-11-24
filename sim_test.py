@@ -6,7 +6,7 @@ import equinox as eqx
 from datetime import datetime
 
 # --- Import Simulator Components ---
-from energysim.sim.simulator_new import JAXSimulator
+from energysim.sim.simulator import JAXSimulator
 from energysim.core.network_builder import RCNetworkBuilder
 from energysim.core.shared.data_structs import (
     ThermalConfig, BatteryConfig, RewardConfig,

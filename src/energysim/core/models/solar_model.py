@@ -14,79 +14,67 @@ class GeometricSolarModel(AbstractSolarModel):
     """
     High-Fidelity model.
     Calculates Plane-of-Array (POA) irradiance using DNI and DHI directly.
-    
-    Physics:
-    1. Direct Beam: DNI * cos(Incidence Angle)
-    2. Diffuse Sky: DHI * Sky View Factor
     """
     @eqx.filter_jit
     def calculate(self, exo: ExogenousData) -> SolarOutput:
         # Constants
         DEG_2_RAD = jnp.pi / 180.0
-        SOLAR_CONSTANT = 1361.0 
+        SOLAR_CONSTANT = 1361.0
 
         # 1. Time Inputs
-        # exo.time_of_year_seconds is (Batch,) or Scalar
         day_of_year = (exo.time_of_year_seconds // 86400) + 1
         hour_of_day = (exo.time_of_year_seconds % 86400) / 3600.0
 
         # 2. Solar Declination (delta)
-        # Approx declination of sun based on day of year
         delta = 23.45 * jnp.sin(DEG_2_RAD * (360.0 / 365.0) * (day_of_year + 284.0))
         delta_rad = delta * DEG_2_RAD
 
         # 3. Hour Angle (omega)
-        # 0 at Solar Noon. Negative morning, positive afternoon.
         omega = 15.0 * (hour_of_day - 12.0)
         omega_rad = omega * DEG_2_RAD
 
         # 4. Location & Panel Geometry
         lat_rad = self.config.latitude_deg * DEG_2_RAD
         tilt_rad = self.config.panel_tilt_deg * DEG_2_RAD
-        # Convert Panel Azimuth (0=North, 180=South) to Math Azimuth (0=South logic for formulas)
-        # Standard convention for these formulas: 0=South, East=Negative, West=Positive
-        # User Input: 180=South. So (Input - 180) -> 0.
-        p_azimuth_rad = (self.config.panel_azimuth_deg - 180.0) * DEG_2_RAD 
+        p_azimuth_rad = (self.config.panel_azimuth_deg - 180.0) * DEG_2_RAD
 
         # 5. Solar Elevation (alpha) & Zenith (theta_z)
         sin_alpha = (jnp.sin(lat_rad) * jnp.sin(delta_rad)) + \
                     (jnp.cos(lat_rad) * jnp.cos(delta_rad) * jnp.cos(omega_rad))
         alpha_rad = jnp.arcsin(jnp.clip(sin_alpha, -1.0, 1.0))
-        
-        theta_z_rad = (jnp.pi / 2.0) - alpha_rad # Zenith angle
+        theta_z_rad = (jnp.pi / 2.0) - alpha_rad
 
         # 6. Solar Azimuth (gamma_s)
         cos_gamma_s = (jnp.sin(alpha_rad) * jnp.sin(lat_rad) - jnp.sin(delta_rad)) / \
                       (jnp.cos(alpha_rad) * jnp.cos(lat_rad) + 1e-6)
-        # Solar Azimuth relative to South
         gamma_s_rad = jnp.sign(omega_rad) * jnp.arccos(jnp.clip(cos_gamma_s, -1.0, 1.0))
 
         # 7. Angle of Incidence (theta)
-        # The angle between the Sun Vector and the Panel Normal
         cos_theta = (jnp.cos(theta_z_rad) * jnp.cos(tilt_rad)) + \
                     (jnp.sin(theta_z_rad) * jnp.sin(tilt_rad) * jnp.cos(gamma_s_rad - p_azimuth_rad))
-        
-        # Clip to 0 (Sun is behind the panel)
         cos_theta = jnp.fmax(0.0, cos_theta)
 
-        # 8. Plane of Array (POA) Irradiance Calculation 
-        
-        # A. Direct Beam Component
-        # DNI is defined as normal to the sun. We project it onto the panel.
-        I_beam = exo.solar_dni_w_m2 * cos_theta
+        # 8. Plane of Array (POA) Irradiance Calculation
 
-        # B. Diffuse Component (Isotropic Sky Model)
-        # DHI is diffuse on horizontal. We scale by how much sky the panel sees.
-        # View Factor = (1 + cos(tilt)) / 2
-        # Flat panel (0 deg) sees 100% sky. Vertical panel (90 deg) sees 50% sky.
-        sky_view_factor = (1.0 + jnp.cos(tilt_rad)) / 2.0
-        I_diffuse = exo.solar_dhi_w_m2 * sky_view_factor
+        # --- UPDATED: Direct Beam with Dynamic Shading ---
+        # exo.pv_shading_factor comes from the horizon mask (0.0 to 1.0)
+        I_beam = exo.solar_dni_w_m2 * cos_theta * exo.pv_shading_factor
+
+        # --- UPDATED: Diffuse with Static Sky View Factor ---
+        # If user provided a specific SVF in config (from offline raytracing), use it.
+        # Otherwise, use the standard unshaded approximation: (1 + cos(beta))/2
+        standard_svf = (1.0 + jnp.cos(tilt_rad)) / 2.0
         
+        # Python logic to select efficient path (static check)
+        if self.config.sky_view_factor is not None:
+            actual_svf = self.config.sky_view_factor
+        else:
+            actual_svf = standard_svf
+            
+        I_diffuse = exo.solar_dhi_w_m2 * actual_svf
+
         # C. Total POA
-        # (Optional: Add Ground Reflection = Albedo * (DNI*sin(alpha)+DHI) * (1-view_factor))
         poa_irradiance = I_beam + I_diffuse
-        
-        # Clamp
         poa_irradiance = jnp.clip(poa_irradiance, 0.0, SOLAR_CONSTANT)
 
         # 9. Power Generation
@@ -94,7 +82,8 @@ class GeometricSolarModel(AbstractSolarModel):
         power_w = poa_irradiance * self.config.panel_area_m2 * self.config.efficiency * temp_factor
 
         return SolarOutput(pv_generation_w=jnp.fmax(0.0, power_w))
-
+    
+    
 class SimpleSolarModel(AbstractSolarModel):
     """
     Estimates generation without geometric knowledge.

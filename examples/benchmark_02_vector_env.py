@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx  # <--- Added import
 from energysim.sim.simulator import JAXSimulator
-from energysim.rl.vector_env import VectorizedEnergyEnv
+from energysim.rl.gymnax_env import VectorizedEnergyEnv
 from energysim.core.data.dataset import SimulationDataset
 from energysim.core.shared.data_structs import (
     BatteryConfig, RewardConfig, HeatPumpConfig, AirConditionerConfig, 

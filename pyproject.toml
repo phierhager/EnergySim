@@ -23,7 +23,8 @@ dependencies = [
     "jax",
     "jaxopt",
     "equinox",
-    "flax"
+    "flax",
+    "gymnax"
 ]
 
 [tool.setuptools.packages.find]
