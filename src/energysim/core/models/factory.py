@@ -7,7 +7,7 @@ from energysim.core.models.battery_model import (
     AbstractBatteryModel, SimpleBatteryModel,
     DegradationBatteryModel, PassthroughBatteryModel
 )
-from energysim.core.models.surrogate import ConvectionSurrogate
+from energysim.core.surrogate import ConvectionSurrogate
 from energysim.core.models.thermal_model import (
     AbstractThermalModel, RCNetworkModel
 )
@@ -25,7 +25,7 @@ from energysim.core.models.thermal_storage_model import (
 from energysim.core.models.solar_model import (
     AbstractSolarModel, SimpleSolarModel, PassthroughSolarModel
 )
-from energysim.core.models.forecaster import (
+from energysim.core.forecaster import (
     AbstractForecaster, GaussianNoiseForecaster, 
     AR1Forecaster, ForecastConfig
     )
@@ -35,7 +35,7 @@ from energysim.core.models.machines import (
 from energysim.core.models.occupancy import OccupancyModel
 from energysim.core.shared.data_structs import MoistureConfig, MoistureState, ThermalConfig
 from energysim.core.models.moisture_model import AbstractMoistureModel, DynamicMoistureModel
-from energysim.core.physics.coefficients import Coefficients
+from energysim.core.physics.constants import Coefficients
 from energysim.core.physics import psychrometrics as psych
 
 # Import configs and dummies
@@ -145,18 +145,6 @@ def create_solar(config: Optional[SolarConfig]) -> AbstractSolarModel:
             raise ValueError(f"Unknown solar model_type: {config.model_type}")
     else:
         return PassthroughSolarModel(DUMMY_SOLAR_CONFIG)
-
-def create_forecaster(config: Optional[ForecastConfig] = None) -> AbstractForecaster:
-    if config is None:
-        config = ForecastConfig()
-        
-    if config.model_type == "gaussian":
-        return GaussianNoiseForecaster(config)
-    elif config.model_type == "ar1":
-        return AR1Forecaster(config)
-    else:
-        raise ValueError(f"Unknown forecaster type: {config.model_type}")
-    
 
 def create_smart_machines(
     configs: list[ApplianceConfig],

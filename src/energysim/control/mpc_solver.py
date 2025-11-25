@@ -19,7 +19,7 @@ from ..core.models.factory import (
 )
 
 # --- UPDATED IMPORTS: Added f_terminal_cost ---
-from ..core.models.objectives import f_cost_step, f_terminal_cost
+from ..core.objectives import f_cost_step, f_terminal_cost
 
 from ..core.shared.data_structs import (
     AirConditionerState, HeatPumpState, SystemState, SystemActions, ExogenousData,

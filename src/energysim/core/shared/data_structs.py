@@ -10,6 +10,10 @@ import jax.numpy as jnp
 # Define array type for clarity
 Array = jnp.ndarray
 
+# --- Global Constants for Padding ---
+MAX_ROOMS = 5
+MAX_MACHINES = 10
+
 
 class ApplianceConfig(eqx.Module):
     name: str = eqx.field(static=True)
@@ -129,17 +133,28 @@ class WindowType:
 # 1. Configuration Modules (Static/Physics)
 # ==========================================
 
-# Assuming this code replaces the ThermalConfig class in your data_structs.py (or similar file)
-
 class ThermalConfig(eqx.Module):
     """Configuration for the Thermal Model."""
+    # State-Space Matrices
     A_matrix: Array
     C_inv_vector: Array
     B_matrix: Array
+
+    # --- High-Fidelity Radiosity Fields ---
+    # Indices of nodes involved in radiation (walls, floor, ceiling)
+    # Shape: (N_surfaces,)
+    surface_node_indices: Array 
     
-    # Node Indices
+    # Pre-computed Radiative Conductance Matrix
+    # G_ij = Sigma * Area_i * F_ij * Eps_eff
+    # Shape: (N_surfaces, N_surfaces)
+    rad_conductance_matrix: Array 
+
+    # Standard Indices
     ambient_air_index: int = eqx.field(static=True)
     ground_node_index: int = eqx.field(static=True)
+    
+    # Groupings
     room_air_indices: Tuple[int, ...] = eqx.field(static=True)
     room_rad_indices: Tuple[int, ...] = eqx.field(static=True)
     wall_indices: Tuple[int, ...] = eqx.field(static=True)
@@ -151,45 +166,26 @@ class ThermalConfig(eqx.Module):
     u_idx_cooling: Array
     air_to_rad_map: Array
 
-    # Mixing & Convection
-    # Dynamic Convection
-    # Pairs: [Node_A, Node_B]
-    convection_pairs: Array = eqx.field(default_factory=lambda: jnp.zeros((0, 2), dtype=jnp.int32))
-    
-    # [NEW] Convection Type Map
-    # 0 = Internal (Natural/HVAC driven), 1 = External (Wind driven)
-    # Shape: (N_convection_pairs,)
-    convection_types: Array = eqx.field(default_factory=lambda: jnp.zeros(0, dtype=jnp.int32))
-    convection_coefficients: Array = eqx.field(default_factory=lambda: jnp.zeros(0))
-    mixing_pairs: Array = eqx.field(default_factory=lambda: jnp.zeros((0, 2), dtype=jnp.int32))
-    mixing_conductance: Array = eqx.field(default_factory=lambda: jnp.zeros(0))
+    # Dynamic Physics Arrays
+    convection_pairs: Array 
+    convection_coefficients: Array 
+    convection_types: Array 
+    mixing_pairs: Array 
+    mixing_conductance: Array 
 
-    # Infiltration (Standard Params - kept for fallback)
+    # Parameters
     use_dynamic_infiltration: bool = eqx.field(static=True, default=False)
     leakage_area_m2: float = eqx.field(static=True, default=0.05)
     stack_coeff: float = eqx.field(static=True, default=0.12)
     wind_coeff: float = eqx.field(static=True, default=0.09)
     room_vol_m3: float = eqx.field(static=True, default=0.0)
-
-    # --- NEW: Advanced Physics Flags ---
-    use_surrogate_convection: bool = eqx.field(static=True, default=False)
-    
-    # Advanced Physics Flags
-    use_airflow_network: bool = eqx.field(static=True, default=False)
-    airflow_config: Optional["AirflowConfig"] = eqx.field(static=True, default=None)
-    
-    use_geometric_shading: bool = eqx.field(static=True, default=False)
-    geometry_config: Optional["GeometryConfig"] = eqx.field(static=True, default=None)
-    
-    # Setpoints
     setpoint: float = eqx.field(static=True, default=21.0)
     comfort_band: float = eqx.field(static=True, default=1.0)
-    
-    # Helpers for dicts
+
+    # Metadata
     node_names: List[str] = eqx.field(static=True)
     node_map: Dict[str, int] = eqx.field(static=True)
     input_map: Dict[str, Dict[str, int]] = eqx.field(static=True)
-
 
 class AirflowConfig(eqx.Module):
     """
@@ -236,6 +232,9 @@ class GeometryConfig(eqx.Module):
     # Mapping: Which surface index in ThermalConfig corresponds to which centroid here
     # (Used to map calculated shading factors back to thermal/solar models)
     shading_map_indices: Array = eqx.field(static=True)
+
+
+
 
 class BatteryConfig(eqx.Module):
     model_type: Literal["simple", "degradation"] = eqx.field(static=True, default="simple")
@@ -366,6 +365,20 @@ class SolarConfig(eqx.Module):
     # If None, the model calculates the unobstructed view factor based on tilt.
     sky_view_factor: Optional[float] = eqx.field(static=True, default=None)
 
+class GroundPhysicsConfig(eqx.Module):
+    """Parameters for the Kasuda-Achenbach ground model."""
+    average_soil_temp_c: float = eqx.field(static=True) # Annual average air temp
+    amplitude_diff_c: float = eqx.field(static=True)    # Annual max - avg
+    phase_lag_days: float = eqx.field(static=True, default=40.0) # Depends on soil density
+
+class SurfaceMap(eqx.Module):
+    """Bridges Geometry (Ray Tracing) to Thermal (Heat Balance)."""
+    # Index in GeometryConfig.surface_centroids -> Index in ThermalConfig.wall_indices
+    geo_to_thermal_indices: Array = eqx.field(static=True)
+    
+    # Which geometric surface index corresponds to the PV panel?
+    pv_surface_index: int = eqx.field(static=True)
+
 
 class MoistureConfig(eqx.Module):
     # Physics
@@ -391,88 +404,121 @@ class MoistureConfig(eqx.Module):
     sorption_slope: float = eqx.field(static=True, default=0.05)
     
 # ==========================================
-# 2. Dynamic State Modules
+# DAE INTERFACE STRUCTURES
 # ==========================================
-# We replace @flax_dataclass with eqx.Module.
-# These are now Pytrees by definition.
 
-class ThermalState(eqx.Module):
-    T_vector: Array
-
-class BatteryState(eqx.Module):
-    soc: Array 
-    soh: Array
-
-class ThermalStorageState(eqx.Module):
-    temperatures_c: Array # (Z, Y, X)
+class DifferentialState(eqx.Module):
+    """
+    The subset of SystemState that evolves continuously via ODEs.
+    """
+    # Building
+    T_vector: Array            # (N_nodes,)
     
-    @property
-    def soc(self) -> Array:
-        # Note: Operations inside properties work, but for JIT-compiled
-        # functions, prefer passing the resulting Array, not the property access
-        # if it involves heavy logic. Here it is fine.
-        avg = jnp.mean(self.temperatures_c)
-        return jnp.clip((avg - 30.0) / (60.0 - 30.0), 0.0, 1.0)
-
-class HeatPumpState(eqx.Module):
-    current_electrical_w: Array
-    current_thermal_w: Array
-
-class AirConditionerState(eqx.Module):
-    current_electrical_w: Array
-    current_thermal_w: Array
-
-class MoistureState(eqx.Module):
-    # We track Humidity Ratio (w), NOT Relative Humidity.
-    # w is conserved mass; RH fluctuates wildly with temperature.
-    humidity_ratio_kg_kg: Array # Shape (n_rooms,)
-    buffer_moisture_content: Array # Shape (n_rooms,)
+    # Storage
+    storage_T: Array           # 1D: (N_nodes,), 3D: (Z, Y, X)
+    
+    # Battery
+    battery_soc: Array         # Scalar
+    
+    # HVAC Inertia (Ramping)
+    hp_power_state: Array      # Scalar (Current Compressor Watts)
+    ac_power_state: Array      # Scalar (Current Compressor Watts)
+    
+    # Moisture
+    moisture_w: Array          # (N_rooms,)
+    moisture_buffer_u: Array   # (N_rooms,)
 
 
-class SystemState(eqx.Module):
-    thermal: ThermalState
-    battery: BatteryState
-    storage: ThermalStorageState
-    heat_pump: HeatPumpState
-    air_conditioner: AirConditionerState
-    moisture: MoistureState
+class ThermalInputs(eqx.Module):
+    """Inputs required to calculate Building derivatives."""
+    Q_solar: Array    # (N_nodes,)
+    Q_internal: Array # (N_nodes,) Occupants + Passive Machines
+    Q_hvac: Array     # (N_nodes,) Heating/Cooling from HP/AC
+    T_ambient: Array  # Scalar
+    wind_speed: Array # Scalar
+
+
+class StorageInputs(eqx.Module):
+    """Inputs required to calculate Tank derivatives."""
+    charge_power_w: Array    # Scalar (Heat from HP)
+    discharge_power_w: Array # Scalar (Heat to House)
+    T_inlet_c: Array         # Scalar (Temp coming from HP)
+    T_return_c: Array        # Scalar (Temp coming from House)
+    T_ambient: Array         # Scalar
+
+
+class RampingInputs(eqx.Module):
+    target_power_w: Array # Scalar
+
+class BatteryInputs(eqx.Module):
+    power_w: Array       # Requested Power (Positive = Charge)
+    T_ambient_c: Array   # Ambient temperature for thermal cooling
+
+class MoistureInputs(eqx.Module):
+    T_room_c: Array                   # Room air temperature
+    hvac_moisture_removal_kg_s: Array # Dehumidification rate (positive = removal)
+    n_occupants: Array                # Number of people
+    infiltration_flow_m3_s: Array     # Air exchange rate
+    atmospheric_pressure: Array      # Ambient atmospheric pressure
+    ambient_temp: Array            # Ambient temperature
+    relative_humidity: Array       # Ambient relative humidity
 
 # =============================================================================
 # CLEANED INPUTS (Actions & Exogenous)
 # =============================================================================
 
 class ExogenousData(eqx.Module):
+    """
+    IMMUTABLE. Pure external data loaded from files or predicted by forecasters.
+    Contains NO simulation-specific or geometry-specific calculated fields.
+    """
+    # Time
+    time_of_year_seconds: Array
+    
     # Weather
     ambient_temp: Array
     solar_dni_w_m2: Array
     solar_dhi_w_m2: Array
     wind_speed_m_s: Array
-    time_of_year_seconds: Array
+    relative_humidity: Array
+    atmospheric_pressure: Array
+    
+    # Grid
     price: Array
+    carbon_intensity: Array
     
-    # Profiles for PASSIVE Machines (Base Load, Fridge, Lights)
-    # Shape: (Time, N_passive_machines)
-    passive_machine_profiles: Array 
+    # Usage Profiles
+    base_load_w: Array
 
-    # Profiles for SMART Machines (EVs, Washers)
-    # Shape: (Time, N_smart_machines)
+    # Shape: (Time, Max_Rooms)
+    occupant_profiles: Array 
+    
+    # Shape: (Time, Max_Passive_Machines)
+    passive_machine_profiles: Array
+    
+    # Shape: (Time, Max_Smart_Machines)
     smart_device_availability: Array
-    
-    # Profiles for OCCUPANTS (People Presence)
-    # Shape: (Time, N_occupants)
-    occupant_profiles: Array
 
-    # --- Dynamic Beam Shading ---
-    # 1.0 = Unshaded, 0.0 = Fully blocked by horizon/obstacles
-    # Scalar for the PV system
-    pv_shading_factor: Array = eqx.field(default_factory=lambda: jnp.array(1.0))
 
-    # Vector for the building surfaces (Walls/Windows)
-    # Shape matches the order of surfaces in the simulator
-    surface_shading_factors: Array = eqx.field(default_factory=lambda: jnp.array([]))
+class EnvironmentalContext(eqx.Module):
+    """
+    DERIVED. Calculated by the Physics Engine for a specific timestep.
+    Contains everything the models need to run that depends on Geometry + Weather.
+    """
+    # Reference to raw data (so models can access Temp/Price directly)
+    exo: ExogenousData 
     
+    # Derived Geometry (The result of Ray-Casting)
+    sun_vector: Array            # (3,)
+    surface_shading_factors: Array # (N_surfaces,)
+    pv_shading_factor: Array       # Scalar
     
-    carbon_intensity: float = 0.0
+    # Derived Physics
+    sky_temp_c: Array
+    ground_temp_c: Array
+    
+    # Wind Pressure (for Airflow Network)
+    wind_pressure_boundary: Array # (N_boundary_nodes,)
 
 class SystemActions(eqx.Module):
     """
@@ -506,3 +552,34 @@ class ThermalStorageOutput(eqx.Module):
 
 class SolarOutput(eqx.Module):
     pv_generation_w: Array
+
+class BatteryOutput(eqx.Module):
+    actual_power_w: Array    # Power actually delivered/absorbed
+    voltage_v: Array         # Terminal Voltage
+    current_a: Array         # Current (Positive = Charge)
+    heat_generation_w: Array # Joule heating + Entropic heat
+    soh: Array               # Current State of Health
+
+
+class SiteProperties(eqx.Module):
+    """
+    Site-specific physical properties. 
+    These must come from the .epw header or configuration, NOT defaults.
+    """
+    latitude_deg: float
+    longitude_deg: float
+    elevation_m: float
+    ground_avg_temp_c: float     # Annual average
+    ground_amplitude_c: float    # Seasonal swing amplitude
+    ground_reflectivity: float = 0.2
+
+
+class SolarCache(eqx.Module):
+    """
+    Pre-computed high-fidelity solar dynamics.
+    Loaded onto GPU once; accessed via index during simulation.
+    Shape: (8760, ...)
+    """
+    sun_direction_vectors: jnp.ndarray  # Shape: (Steps, 3)
+    surface_shading_factors: jnp.ndarray # Shape: (Steps, N_surfaces)
+    incident_angle_modifiers: jnp.ndarray # Shape: (Steps, N_surfaces) - Optional optimization

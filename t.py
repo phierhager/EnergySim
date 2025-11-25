@@ -16,7 +16,7 @@ from energysim.core.shared.data_structs import (
     ApplianceConfig, OccupantConfig, 
     ThermalConfig
 )
-from energysim.core.physics.coefficients import Coefficients
+from energysim.core.physics.constants import Coefficients
 from energysim.core.network_builder import RCNetworkBuilder
 from energysim.utils.geometry import get_polygon_normal, get_polygon_area_3d, get_azimuth_tilt
 from energysim.core.physics.thermo import get_internal_convection

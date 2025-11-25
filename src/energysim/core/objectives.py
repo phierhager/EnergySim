@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import jax.nn as jnn
 from jax import jit
 from functools import partial
-from ..shared.data_structs import (
+from .shared.data_structs import (
     SystemState, SystemActions, ExogenousData,
     HeatPumpOutput, AirConditionerOutput, ThermalStorageOutput, SolarOutput,
     ThermalConfig, BatteryConfig, RewardConfig,

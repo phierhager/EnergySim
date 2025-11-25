@@ -1,23 +1,18 @@
+
+
 ```mermaid
 graph TD
-    Data[Exogenous Data] --> Sim[JAX Simulator]
-    Config[Geom/Physics Config] --> Sim
-    Behavior[Stochastic Models] --> Data
+    File[EPW / CSV File] -->|ScenarioLoader (CPU)| GT[Ground Truth ExogenousData]
+    GT -->|Upload| VRAM[GPU VRAM]
     
-    Sim --> State[System State]
-    
-    State --> MPC[MPC Solver]
-    State --> RL[RL Agent]
-    State --> Base[Baselines]
-    
-    MPC --> Action
-    RL --> Action
-    Base --> Action
-    
-    Action --> Sim
-    
-    subgraph Analysis
-    Sim --> Renderer[Renderer / Plots]
-    Sim --> SysID[Calibration]
+    subgraph GPU Simulation Loop [Step t]
+        VRAM -->|Slice [t]| RealData[Current Exo]
+        VRAM -->|Slice [t:t+H]| FutureData[Perfect Horizon]
+        
+        RealData -->|PhysicsEngine| RealCtx[Real Context]
+        RealCtx -->|DAE Solver| NextState
+        
+        FutureData -->|Forecaster| NoisyForecast[Forecast Exo]
+        NoisyForecast -->|MPC Solver| Action
     end
 ```

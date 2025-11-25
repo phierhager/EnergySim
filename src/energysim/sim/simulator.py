@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from typing import Tuple, Optional, Dict, List, Any, Union
 
-from energysim.core.physics.airflow_network import AirflowNetworkSolver
+from energysim.core.physics.airflow import AirflowNetworkSolver
 
 # --- Import Core Factories ---
 from ..core.models.factory import (
@@ -29,7 +29,7 @@ from ..core.models.machines import AbstractMachine, SmartAppliance, PassiveEquip
 from ..core.models.occupancy import OccupancyModel
 
 # --- Objectives ---
-from ..core.models.objectives import f_cost_step
+from ..core.objectives import f_cost_step
 
 # --- Data Structures ---
 from ..core.shared.data_structs import (
@@ -42,11 +42,11 @@ from ..core.shared.data_structs import (
 )
 
 # --- Physics ---
-from ..core.physics.coefficients import Coefficients
+from ..core.physics.constants import Coefficients
 from ..core.physics.thermo import SurfaceRoughness
 from ..core.physics.solar import get_sun_position, calculate_solar_incidence, calculate_iam
 from ..core.physics.thermo import calculate_external_convection, get_convection_multiplier
-from ..core.weather import get_ground_temperature
+from ..core.physics.weather import get_ground_temperature
 
 
 class JAXSimulator(eqx.Module):
@@ -238,7 +238,7 @@ class JAXSimulator(eqx.Module):
         Performs ray-casting to update surface shading factors.
         """
         geo_cfg = self.thermal.config.geometry_config
-        if not self.thermal.config.use_geometric_shading or geo_cfg is None:
+        if geo_cfg is None:
             return exo
 
         # 1. Calculate Sun Vector
@@ -284,7 +284,7 @@ class JAXSimulator(eqx.Module):
         Returns: infiltration_mass_flow_kg_s (N_rooms,)
         """
         af_cfg = self.thermal.config.airflow_config
-        if not self.thermal.config.use_airflow_network or af_cfg is None:
+        if af_cfg is None:
             return jnp.zeros_like(T_rooms) # Return zeros, let fallback logic handle it
 
         # 1. Construct Parameters for Solver
@@ -414,7 +414,7 @@ class JAXSimulator(eqx.Module):
         # Get current room temps for stack effect
         T_rooms = current_state.thermal.T_vector[jnp.array(self.thermal.config.room_air_indices)]
         
-        if self.thermal.config.use_airflow_network:
+        if self.thermal.config.airflow_config is not None:
             # High Fidelity
             net_airflow_kg_s = self._solve_airflow_pressure_balance(T_rooms, exo_shaded)
             # Convert to volumetric flow for compatibility (m3/s assuming ref density)

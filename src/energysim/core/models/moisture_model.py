@@ -1,154 +1,144 @@
 import jax.numpy as jnp
 import equinox as eqx
-from ..shared.data_structs import MoistureConfig, MoistureState, ExogenousData, Array
+from ..shared.data_structs import MoistureConfig, MoistureInputs, Array, DifferentialState
 from ..physics import psychrometrics as psych
 
 class AbstractMoistureModel(eqx.Module):
-    state: MoistureState
     config: MoistureConfig
     
-    @eqx.filter_jit
-    def step(self, 
-             T_room_c: Array, 
-             hvac_moisture_removal_kg_s: Array, 
-             n_occupants: Array, 
-             infiltration_flow_m3_s: Array, # Coupling from Thermal Model
-             exo: ExogenousData, 
-             dt: float
-             ) -> 'AbstractMoistureModel':
+    def dynamics(self, t: float, state: DifferentialState, inputs: MoistureInputs) -> Array:
+        """
+
+        Returns an array concatenating [dw/dt, du/dt].        Calculates derivatives for moisture states.
+        """
         raise NotImplementedError
 
-class DynamicMoistureModel(AbstractMoistureModel):
-    def __init__(self, config: MoistureConfig, state: MoistureState):
-        self.config = config
-        self.state = state
 
-    @eqx.filter_jit
-    def step(self, 
-             T_room_c: Array, 
-             hvac_moisture_removal_kg_s: Array, 
-             n_occupants: Array, 
-             infiltration_flow_m3_s: Array,
-             exo: ExogenousData, 
-             dt: float
-             ) -> 'DynamicMoistureModel':
+class DynamicMoistureModel(AbstractMoistureModel):
+    """
+    Standard Mass Balance Model.
+    Tracks only air humidity ratio (w).
+    Assumes no moisture buffering in walls.
+    """
+    def __init__(self, config: MoistureConfig):
+        self.config = config
+
+    def dynamics(self, t: float, state: DifferentialState, inputs: MoistureInputs) -> Array:
+        """
+        dw/dt = (Sum m_dot_water) / Mass_Air_Dry_Room
+        """
+        # Unpack State
+        w_room = state.moisture_w
         
-        # 1. Calculate Ambient Moisture State
-        # Use Exogenous P and RH to get Ambient Humidity Ratio (w_amb)
-        # Note: We handle scalar or vector inputs via broadcasting
+        # Unpack Inputs
+        T_room = inputs.T_room_c
+        atmospheric_pressure = inputs.atmospheric_pressure
+        ambient_temp = inputs.ambient_temp
+        relative_humidity = inputs.relative_humidity
+
+        # 1. Physics Constants
+        # Calculate dynamic air density based on current state
+        rho_air = psych.calculate_air_density(T_room, atmospheric_pressure)
+        mass_air_dry = self.config.air_volume_m3 * rho_air
+        
+        # Ambient Humidity Ratio
         w_amb = psych.calculate_humidity_ratio(
-            exo.ambient_temp, 
-            exo.relative_humidity, 
-            exo.atmospheric_pressure
+            ambient_temp, 
+            relative_humidity, 
+            atmospheric_pressure
         )
         
-        # 2. Internal Generation (Latent Load)
-        # People breathing/sweating
-        m_dot_gen = n_occupants * self.config.latent_gen_person_kg_s
+        # 2. Sources & Sinks (kg_water/s)
         
-        # 3. Infiltration Mass Transfer
-        # m_dot_inf = Vol_flow * rho_air * (w_amb - w_room)
-        # We calculate dynamic air density based on current room T and Ambient P
-        rho_air = psych.calculate_air_density(T_room_c, exo.atmospheric_pressure)
+        # A. Infiltration Mass Transfer
+        # m_dot_vapor = m_dot_dry_air * (w_amb - w_room)
+        m_dot_air_inf = inputs.infiltration_flow_m3_s * rho_air
+        m_dot_inf_vapor = m_dot_air_inf * (w_amb - w_room)
         
-        # Mass flow of dry air entering (kg_air/s)
-        m_dot_air_inf = infiltration_flow_m3_s * rho_air
+        # B. Internal Generation (Occupants)
+        m_dot_gen = inputs.n_occupants * self.config.latent_gen_person_kg_s
         
-        # Moisture added/lost via airflow
-        m_dot_inf_water = m_dot_air_inf * (w_amb - self.state.humidity_ratio_kg_kg)
+        # C. HVAC Removal
+        # Input is defined as removal rate (positive), so we subtract it
+        m_dot_hvac = -inputs.hvac_moisture_removal_kg_s
         
-        # 4. HVAC Removal (Dehumidification)
-        # This input is negative (removal), coming from AC model
-        m_dot_hvac = -hvac_moisture_removal_kg_s
+        # 3. Derivative Calculation
+        dw_dt = (m_dot_inf_vapor + m_dot_gen + m_dot_hvac) / mass_air_dry
         
-        # 5. Mass Balance Integration
-        # dw/dt = Sum(m_dot_water) / Mass_Air_Dry_Room
-        # Mass_Air_Dry_Room approx constant or dynamic. Let's use config volume * const density for stability,
-        # or use the dynamic density calculated above. Dynamic is better.
-        room_dry_air_mass = self.config.air_volume_m3 * rho_air
+        # EMPD buffer state doesn't exist here, return 0 derivative for it
+        # (assuming fixed state vector size in global DAE)
+        du_dt = jnp.zeros_like(state.moisture_buffer_u)
         
-        dw_dt = (m_dot_inf_water + m_dot_gen + m_dot_hvac) / room_dry_air_mass
-        
-        w_next = self.state.humidity_ratio_kg_kg + (dw_dt * dt)
-        
-        # Physics Clamp: 0 < w < 0.030 (approx saturation at 35C)
-        w_next = jnp.clip(w_next, 1e-5, 0.030)
-        
-        # Update State
-        new_state = eqx.tree_at(lambda s: s.humidity_ratio_kg_kg, self.state, w_next)
-        return eqx.tree_at(lambda m: m.state, self, new_state)
+        return jnp.concatenate([dw_dt, du_dt])
 
-    def get_relative_humidity(self, T_room_c: Array, P_amb: Array) -> Array:
-        """Helper to get current RH% for comfort observation."""
-        return psych.calculate_relative_humidity(T_room_c, self.state.humidity_ratio_kg_kg, P_amb) * 100.0
-    
+
 class EMPDMoistureModel(AbstractMoistureModel):
     """
     Effective Moisture Penetration Depth (EMPD) Model.
-    Simulates moisture buffering in hygroscopic materials (gypsum, wood, textiles).
+    Tracks air humidity (w) AND wall buffer moisture content (u).
+    Simulates hygroscopic inertia (e.g., gypsum board absorbing humidity peaks).
+    
+    State Vector: [w_room, u_buffer]
     """
-    def __init__(self, config: MoistureConfig, state: MoistureState):
+    buffer_mass_dry: float
+
+    def __init__(self, config: MoistureConfig):
         self.config = config
-        self.state = state
-
-        # Dry buffer mass (kg_material)
+        # Pre-calculate static mass
         self.buffer_mass_dry = (
-            config.buffer_area_m2
-            * config.empd_thickness
-            * config.material_density
+            config.buffer_area_m2 * config.empd_thickness * config.material_density
         )
 
-    @eqx.filter_jit
-    def step(
-        self,
-        T_room_c: Array,
-        hvac_moisture_removal_kg_s: Array,
-        n_occupants: Array,
-        infiltration_flow_m3_s: Array,
-        exo: ExogenousData,
-        dt: float,
-    ) -> "EMPDMoistureModel":
-
-        # ---- States ----
-        w_room = self.state.humidity_ratio_kg_kg           # kg_water/kg_dry_air
-        u_wall = self.state.buffer_moisture_content        # kg_water/kg_material
-
-        # ---- Air properties ----
-        p_atm = exo.atmospheric_pressure
-        rho_air = psych.calculate_air_density(T_room_c, p_atm)
-
-        # ---- Sorption interface ----
+    def dynamics(self, t: float, state: DifferentialState, inputs: MoistureInputs) -> Array:
+        """
+        Coupled ODE system:
+        dw/dt = (Sources - BufferFlux) / Mass_Air
+        du/dt = BufferFlux / Mass_Buffer
+        """
+        # Unpack State
+        w_room = state.moisture_w
+        u_wall = state.moisture_buffer_u # kg_water / kg_material
+        
+        # Unpack Inputs
+        T_room = inputs.T_room_c
+        atmospheric_pressure = inputs.atmospheric_pressure
+        ambient_temp = inputs.ambient_temp
+        relative_humidity = inputs.relative_humidity
+        
+        # 1. Physics Constants
+        p_atm = atmospheric_pressure
+        rho_air = psych.calculate_air_density(T_room, p_atm)
+        mass_air_dry = self.config.air_volume_m3 * rho_air
+        
+        # 2. Sorption Isotherm (Physics of the Wall Surface)
+        # Relates Moisture Content (u) to Surface Relative Humidity (phi)
+        # Linear approximation: u = slope * phi  =>  phi = u / slope
         phi_surf = jnp.clip(u_wall / self.config.sorption_slope, 0.01, 0.99)
-        w_surf = psych.calculate_humidity_ratio(T_room_c, phi_surf, p_atm)
-
-        # ---- Mass transfer between room air and buffer ----
-        beta = 2.0e-3  # m/s
+        
+        # Convert Surface RH to Surface Humidity Ratio (w_surf)
+        # This drives the gradient between air and wall
+        w_surf = psych.calculate_humidity_ratio(T_room, phi_surf, p_atm)
+        
+        # 3. Buffer Mass Transfer Rate (m_dot_buffer)
+        # m_dot = beta * Area * rho * (w_air - w_surf)
+        # beta ~ 2e-3 m/s (mass transfer coefficient)
+        beta = 2.0e-3
         m_dot_buffer = beta * self.config.buffer_area_m2 * rho_air * (w_room - w_surf)
-
-        # ---- Ambient infiltration ----
-        w_amb = psych.calculate_humidity_ratio(
-            exo.ambient_temp, exo.relative_humidity, p_atm
-        )
-        m_dot_inf_dry = infiltration_flow_m3_s * rho_air
-        m_dot_inf_water = m_dot_inf_dry * (w_amb - w_room)
-
-        # ---- Internal gains + HVAC ----
-        m_dot_gen = n_occupants * self.config.latent_gen_person_kg_s
-        m_dot_hvac = -hvac_moisture_removal_kg_s
-
-        # ---- Room moisture balance ----
-        m_dry_air_room = self.config.air_volume_m3 * rho_air
-        dw_dt = (m_dot_inf_water + m_dot_gen + m_dot_hvac - m_dot_buffer) / m_dry_air_room
-
-        w_next = jnp.clip(w_room + dt * dw_dt, 1e-6, 0.03)
-
-        # ---- Buffer moisture balance ----
+        
+        # 4. Room Air Balance
+        w_amb = psych.calculate_humidity_ratio(ambient_temp, relative_humidity, p_atm)
+        
+        m_dot_air_inf = inputs.infiltration_flow_m3_s * rho_air
+        m_dot_inf = m_dot_air_inf * (w_amb - w_room)
+        
+        m_dot_gen = inputs.n_occupants * self.config.latent_gen_person_kg_s
+        m_dot_hvac = -inputs.hvac_moisture_removal_kg_s
+        
+        # dw/dt: Note that positive m_dot_buffer means moisture LEAVING air into wall
+        dw_dt = (m_dot_inf + m_dot_gen + m_dot_hvac - m_dot_buffer) / mass_air_dry
+        
+        # 5. Buffer Storage Balance
+        # du/dt = Mass_Flow_Into_Wall / Dry_Mass_Of_Wall
         du_dt = m_dot_buffer / self.buffer_mass_dry
-        u_next = jnp.clip(u_wall + dt * du_dt, 0.0, 0.30)
-
-        # ---- Update ----
-        new_state = MoistureState(
-            humidity_ratio_kg_kg=w_next,
-            buffer_moisture_content=u_next,
-        )
-        return eqx.tree_at(lambda m: m.state, self, new_state)
+        
+        return jnp.concatenate([dw_dt, du_dt])

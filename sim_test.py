@@ -13,7 +13,7 @@ from energysim.core.shared.data_structs import (
     HeatPumpConfig, AirConditionerConfig, ThermalStorageConfig, SolarConfig,
     ApplianceConfig, SystemActions, ExogenousData
 )
-from energysim.core.physics.coefficients import PhysicsConfig
+from energysim.core.physics.constants import PhysicsConfig
 
 def run_test():
     print("--- Setting up Simulation ---")

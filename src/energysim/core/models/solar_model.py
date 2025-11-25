@@ -1,13 +1,15 @@
+# energysim/core/models/solar_model.py
 import jax.numpy as jnp
 import equinox as eqx
 from ..shared.data_structs import SolarConfig, ExogenousData, SolarOutput
 
+# --- Protocol: AlgebraicModel ---
+# calculate(inputs) -> Output
+
 class AbstractSolarModel(eqx.Module):
     config: SolarConfig
-
-    @eqx.filter_jit
-    def calculate(self, exogenous: ExogenousData) -> SolarOutput:
-        """Calculates PV output from exogenous weather."""
+    
+    def calculate(self, exo: ExogenousData) -> SolarOutput:
         raise NotImplementedError
 
 class GeometricSolarModel(AbstractSolarModel):

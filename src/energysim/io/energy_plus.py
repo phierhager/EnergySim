@@ -16,7 +16,7 @@ from energysim.core.shared.data_structs import (
     ApplianceConfig, OccupantConfig, 
     ThermalConfig, AirflowConfig
 )
-from energysim.core.physics.coefficients import Coefficients
+from energysim.core.physics.constants import Coefficients
 from energysim.core.network_builder import RCNetworkBuilder
 from energysim.utils.geometry import get_polygon_normal, get_polygon_area_3d, get_azimuth_tilt
 from energysim.core.physics.thermo import get_internal_convection
@@ -382,9 +382,9 @@ class EnergyPlusBridge:
         # We must rebuild the ThermalConfig created by builder.compile()
         # because eqx modules are immutable.
         self.thermal_config = eqx.tree_at(
-            lambda t: (t.use_airflow_network, t.airflow_config, t.use_geometric_shading, t.geometry_config),
+            lambda t: (t.airflow_config, t.geometry_config),
             self.thermal_config,
-            (True, af_config, geo_config is not None, geo_config)
+            (af_config, geo_config)
         )
         
         print(f"--- Import Complete ---")

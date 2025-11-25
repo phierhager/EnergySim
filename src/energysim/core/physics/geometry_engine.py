@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-from functools import partial
 
 def ray_intersects_triangle(
     ray_origin: jnp.ndarray,    # (3,)

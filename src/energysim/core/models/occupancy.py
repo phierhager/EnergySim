@@ -1,26 +1,20 @@
+# energysim/core/models/occupancy.py
 import jax.numpy as jnp
 import equinox as eqx
 from ..shared.data_structs import OccupantConfig
 
+class OccupancyOutput(eqx.Module):
+    heat_gain_w: float
+
 class OccupancyModel(eqx.Module):
-    """
-    Pure thermal gains. No electrical connection.
-    """
     config: OccupantConfig
     target_node_index: int = eqx.field(static=True)
-
+    
     def __init__(self, config: OccupantConfig, target_node_index: int):
         self.config = config
         self.target_node_index = target_node_index
 
-    @eqx.filter_jit
-    def step(self, count_signal: float):
-        """
-        Args:
-            count_signal: Number of people (or fraction of max capacity)
-        Returns:
-            heat_w: The metabolic heat gain
-        """
-        # No electrical power return needed!
+    def calculate(self, count_signal: float) -> OccupancyOutput:
+        """Pure algebraic mapping from profile to heat."""
         heat_w = self.config.nominal_heat_w * count_signal
-        return self, heat_w
+        return OccupancyOutput(heat_w)
