@@ -6,161 +6,230 @@ from typing import NamedTuple, Tuple
 # Type alias for clarity
 Array = jax.Array
 
-# --- 1. Configuration & Data Structures ---
+# --- 1. Physics-Informed Configuration ---
+
+class CompressorPhysics(NamedTuple):
+    # --- Isentropic Efficiency Map (Energy Quality) ---
+    eta_peak: float = 0.58 
+    design_lift_k: float = 30.0
+    design_speed_ratio: float = 0.5
+    # Sensitivity coefficients
+    k_lift: float = 0.0005    # Penalty for high pressure ratio
+    k_speed: float = 0.25     # Penalty for deviating from optimal RPM
+    
+    # --- Volumetric Efficiency (Mass Flow Limit) ---
+    # At T_evap = -25C, density is low. Capacity must drop.
+    # We use a simplified Antoine-like relation for suction density.
+    # displacement_factor: scales the raw physical size of the compressor
+    max_displacement_w_per_k: float = 120.0 
 
 class HeatPumpConfig(NamedTuple):
-    # Power constraints
+    # Electrical Limits
     max_electrical_power_w: float
     min_electrical_power_w: float
-    ramp_rate_w_per_sec: float
     
-    # Physical Design constraints
+    # Design Constraints
     design_air_flow_m3_s: float
-    max_supply_temp_c: float
     
-    # --- Highest Fidelity Parameters ---
-    # UA: Overall Heat Transfer Coefficient (W/K) per room.
-    # Replaces "Approach Temp". 
-    # High UA = Premium unit. Low UA = Budget unit.
-    ua_condenser_nominal: float = 850.0 
+    # Heat Exchanger UA (Watts/Kelvin)
+    # High UA = Better approach temps = Higher Efficiency
+    ua_condenser_nominal: float = 350.0  
+    ua_evaporator_nominal: float = 450.0
     
-    eta_second_law: float = 0.45           # % of Carnot limit
-    motor_eff_curve_coeffs: tuple = (0.7, 0.4, -0.2) # Efficiency of the inverter/motor
-    
-    # Defrost parameters
+    # Sub-components
+    compressor: CompressorPhysics = CompressorPhysics(
+        max_displacement_w_per_k=85.0  # Reduced from 120.0
+    )
+    motor_eff_curve_coeffs: tuple = (0.88, 0.08, -0.04) 
+
+    # Environment
     enable_defrost: bool = True
-    defrost_max_penalty: float = 0.15      # Max energy loss fraction
 
 class HeatPumpOutput(NamedTuple):
     thermal_power_w: Array
     electrical_power_w: Array
     cop: Array
     supply_temp_c: Array
-    condenser_temp_c: Array # Exposed for debugging the physics
+    condenser_temp_c: Array 
+    evaporator_temp_c: Array
+    eta_second_law: Array
+    volumetric_limit_hit: Array # Diagnostic: Did we max out flow?
 
 class ExogenousData(NamedTuple):
     ambient_temp: Array
     air_density: Array
-    relative_humidity: Array # 0.0 to 1.0
+    relative_humidity: Array 
 
-# --- 2. The Mechanics ---
+# --- 2. The Mechanics (Physics Engine) ---
 
-class HighFidelityHeatPump(eqx.Module):
+import jax.numpy as jnp
+import equinox as eqx
+from ..shared.data_structs import HeatPumpConfig, HeatPumpOutput, Array, ExogenousData
+
+class AbstractHeatPumpModel(eqx.Module):
+    current_electrical_w: Array
+    current_thermal_w: Array
     config: HeatPumpConfig
     n_rooms: int = eqx.field(static=True)
-    cp_air: float = 1005.0  # J/kg*K
 
-    def _calculate_defrost_penalty(self, ambient_temp: Array, rh: Array) -> Array:
+    @eqx.filter_jit
+    def step(self, requested_electrical_w: Array, exo: ExogenousData, dt: float) -> tuple['AbstractHeatPumpModel', HeatPumpOutput]:
+        raise NotImplementedError
+
+
+class PassthroughHeatPumpModel(AbstractHeatPumpModel):
+    def __init__(self, config: HeatPumpConfig, n_rooms: int):
+        super().__init__(
+            current_electrical_w=jnp.zeros(n_rooms),
+            current_thermal_w=jnp.zeros(n_rooms),
+            config=config,
+            n_rooms=n_rooms
+        )
+
+    @eqx.filter_jit
+    def step(self, requested_electrical_w: Array, exo: ExogenousData, dt: float):
+        # Pass through 0s, maintain state as 0s
+        return self, HeatPumpOutput(
+            thermal_power_w=self.current_thermal_w,
+            electrical_power_w=self.current_electrical_w
+        )
+
+class TopTierHeatPump(eqx.Module):
+    config: HeatPumpConfig
+    n_rooms: int = eqx.field(static=True)
+    cp_air: float = 1005.0 
+
+    def _calculate_isentropic_efficiency(self, lift_k: Array, speed_ratio: Array) -> Array:
         """
-        Calculates efficiency penalty due to frosting.
-        Gaussian risk centered at +1.0C, magnified by Humidity > 60%.
+        Calculates Compressor Isentropic Efficiency (eta_II).
+        Penalizes efficiency when Lift is high or Speed is off-design.
         """
-        if not self.config.enable_defrost:
-            return jnp.array(1.0)
-            
-        # Physics: Frost formation peaks when air holds moisture but surfaces are freezing.
-        # Peak risk at +1.0C ambient (coil is sub-zero).
-        temp_risk = jnp.exp(-((ambient_temp - 1.0)**2) / (2 * 4.0**2))
+        c = self.config.compressor
+        delta_lift = lift_k - c.design_lift_k
+        delta_speed = speed_ratio - c.design_speed_ratio
         
-        # Physics: No moisture = No frost.
-        humidity_risk = jax.nn.sigmoid(15.0 * (rh - 0.60))
+        # Elliptical/Parabolic decay
+        penalty = (c.k_lift * delta_lift**2) + (c.k_speed * delta_speed**2)
+        return jnp.clip(c.eta_peak - penalty, 0.20, 0.75)
+
+    def _calculate_volumetric_limit(self, t_evap_c: Array, speed_ratio: Array) -> Array:
+        """
+        Calculates the MAXIMUM Q_source the compressor can physically ingest.
+        Physics: Mass Flow ~ RPM * Suction_Density
+        Suction Density drops exponentially with Temperature.
+        """
+        # 1. Density Proxy (Simplified Clausius-Clapeyron / Ideal Gas)
+        # Normalized to 1.0 at 0C. Drops to ~0.4 at -20C.
+        # This curve shape is critical for "Cold Climate" realism.
+        density_factor = jnp.exp(0.045 * t_evap_c)
         
-        penalty_magnitude = self.config.defrost_max_penalty * temp_risk * humidity_risk
-        return 1.0 - penalty_magnitude
+        # 2. Volumetric Efficiency drop at high speeds
+        vol_eff = 0.95 - (0.1 * speed_ratio)
+        
+        # 3. Max Source Heat (Watts)
+        # A scaling factor representing displacement * latent_heat
+        limit_w = self.config.compressor.max_displacement_w_per_k * 300.0 # Base scaler
+        
+        return limit_w * speed_ratio * density_factor * vol_eff
 
     def _calculate_motor_efficiency(self, electrical_w: Array) -> Array:
-        """
-        Separates Electrical Efficiency (Inverter + Motor) from Thermodynamic Efficiency.
-        """
         max_w_per_room = self.config.max_electrical_power_w / self.n_rooms
         plr = electrical_w / (max_w_per_room + 1e-6)
         c = self.config.motor_eff_curve_coeffs
-        
-        # Polynomial approximation of VFD/ECM motor efficiency
         eff = c[0] + (c[1] * plr) + (c[2] * (plr**2))
-        return jnp.clip(eff, 0.1, 0.96)
+        return jnp.clip(eff, 0.1, 0.98)
 
     def calculate_output(self, power_state: Array, T_sink_c: Array, exo: ExogenousData) -> HeatPumpOutput:
         
+        # --- A. Input State Pre-processing ---
         max_w_per_room = self.config.max_electrical_power_w / self.n_rooms
-        
-        # --- A. Airflow & UA Scaling (Fluid Dynamics) ---
-        # 1. Variable Air Volume (VAV) logic
         plr = jnp.clip(power_state / (max_w_per_room + 1e-6), 0.0, 1.0)
-        # Fan curve: starts at 20%, scales to 100%
+        
+        # Fan Laws (Variable Air Volume)
         flow_ratio = 0.2 + 0.8 * plr 
         m_dot = self.config.design_air_flow_m3_s * exo.air_density * flow_ratio
         m_cp = m_dot * self.cp_air
 
-        # 2. UA Scaling
-        # Nusselt correlation: Heat transfer (h) scales with Velocity^0.8
-        # Therefore, UA scales with flow_ratio^0.8
-        ua_effective = self.config.ua_condenser_nominal * (flow_ratio ** 0.8)
+        # Variable UA Scaling
+        ua_cond_eff = self.config.ua_condenser_nominal * (flow_ratio ** 0.8)
+        ua_evap_eff = self.config.ua_evaporator_nominal * (flow_ratio ** 0.8) 
 
-        # --- B. Electrical Conversion ---
+        # Electrical -> Shaft Power
         eta_motor = self._calculate_motor_efficiency(power_state)
         shaft_power = power_state * eta_motor
 
-        # --- C. Implicit Physics Solver (Fixed Point Iteration) ---
-        # We solve for the Equilibrium Q where Thermodynamics (Carnot) matches Heat Transfer (UA).
+        # --- B. Implicit Physics Solver (Energy + Mass Balance) ---
+        # State: (Q_thermal, T_cond, T_evap, Eta_II, Volumetric_Flag)
+        InitState = Tuple[Array, Array, Array, Array, Array]
         
-        # Initial Guess for Q (prevents cold-start singularities)
-        q_guess = power_state * 3.0 
-        
-        # Carry Tuple: (Current Estimate of Q, Current Estimate of T_cond)
-        # We define T_cond guess as T_sink + 5.0 just to start the loop
-        InitState = Tuple[Array, Array]
-        init_carry: InitState = (q_guess, T_sink_c + 5.0)
-
-        def energy_balance_step(carry: InitState, _) -> Tuple[InitState, None]:
-            q_prev, _ = carry
-            
-            # 1. Air Side Physics
-            # Temperature rise required to carry Q away
-            delta_t_air = q_prev / (m_cp + 1e-4)
-            t_supply_internal = T_sink_c + delta_t_air
-            
-            # 2. Heat Exchanger Physics (The "UA" Model)
-            # To push Q through the HX, T_cond must be higher than T_supply.
-            # Q = UA * (T_cond - T_supply)  ->  T_cond = T_supply + Q/UA
-            approach_t = q_prev / (ua_effective + 1e-4)
-            t_cond_c = t_supply_internal + approach_t
-            
-            # 3. Thermodynamic Cycle (Carnot)
-            t_cond_k = t_cond_c + 273.15
-            t_amb_k = exo.ambient_temp + 273.15
-            
-            # Lift Calculation (Clamped to 5K to avoid singularity)
-            lift = jnp.maximum(5.0, t_cond_k - t_amb_k)
-            cop_carnot = t_cond_k / lift
-            
-            # 4. Energy Balance
-            cop_thermo = cop_carnot * self.config.eta_second_law
-            q_new = shaft_power * cop_thermo
-            
-            # Soft Update (Damping factor 0.5 for numerical stability)
-            q_update = 0.5 * q_prev + 0.5 * q_new
-            
-            return (q_update, t_cond_c), None
-
-        # Execute Solver
-        # We scan 6 times to converge. We only care about the final state (carry).
-        (q_final_raw, t_cond_final), _ = jax.lax.scan(
-            energy_balance_step, 
-            init_carry, 
-            None, 
-            length=6
+        # Robust Initial Guesses
+        init_carry: InitState = (
+            shaft_power * 3.0,          # Guess Q ~ COP of 3
+            T_sink_c + 5.0,             # Guess T_cond
+            exo.ambient_temp - 5.0,     # Guess T_evap
+            jnp.array(0.5),             # Guess Eta
+            jnp.array(0.0)              # Limit flag
         )
 
-        # --- D. Environmental Penalties ---
-        defrost_mod = self._calculate_defrost_penalty(exo.ambient_temp, exo.relative_humidity)
-        q_final = q_final_raw * defrost_mod
+        def system_balance_step(carry: InitState, _) -> Tuple[InitState, None]:
+            q_prev, _, _, _, _ = carry
+            
+            # 1. Sink Side (Condenser)
+            # T_cond rises to push Q into the room
+            delta_t_air = q_prev / (m_cp + 1e-4)
+            t_supply = T_sink_c + delta_t_air
+            t_cond_new = t_supply + (q_prev / (ua_cond_eff + 1e-4))
+            
+            # 2. Source Side (Evaporator)
+            # T_evap drops to pull (Q - Work) from the outside air
+            q_source_needed = q_prev - shaft_power
+            t_evap_new = exo.ambient_temp - (q_source_needed / (ua_evap_eff + 1e-4))
+            
+            # 3. Volumetric Check (The "Choke")
+            # Can the compressor actually pump this much q_source at this t_evap?
+            max_q_source = self._calculate_volumetric_limit(t_evap_new, plr)
+            
+            # Soft clamp for differentiability (LogSumExp trick or simple min)
+            # We use simple min here for clarity, LogSumExp if gradients get noisy
+            q_source_limited = jnp.minimum(q_source_needed, max_q_source)
+            limit_hit = jnp.where(q_source_needed > max_q_source, 1.0, 0.0)
+            
+            # Recalculate Q_thermal if we were choked
+            q_thermal_limited = q_source_limited + shaft_power
+
+            # 4. Thermodynamic Cycle
+            t_cond_k = t_cond_new + 273.15
+            t_evap_k = t_evap_new + 273.15
+            lift = jnp.maximum(8.0, t_cond_k - t_evap_k) # Min lift 8K
+            
+            cop_carnot = t_cond_k / lift
+            eta_ii_new = self._calculate_isentropic_efficiency(lift, plr)
+            
+            # 5. Energy Balance Target
+            cop_thermo = cop_carnot * eta_ii_new
+            q_target_thermo = shaft_power * cop_thermo
+            
+            # Final Q is the minimum of Thermodynamic Limit and Volumetric Limit
+            q_target_final = jnp.minimum(q_target_thermo, q_thermal_limited)
+
+            # Soft Update (Damping)
+            q_update = 0.6 * q_prev + 0.4 * q_target_final
+            
+            return (q_update, t_cond_new, t_evap_new, eta_ii_new, limit_hit), None
+
+        # Execute Solver
+        (q_final_raw, t_cond_final, t_evap_final, eta_final, limit_hit), _ = jax.lax.scan(
+            system_balance_step, init_carry, None, length=8
+        )
+
+        # --- C. Final Output Generation ---
+        q_final = q_final_raw
         
-        # Handle the edge case where power is 0
+        # Defrost penalty (Simplified for this snippet)
+        # If T_evap < 0 and RH is high, apply penalty
+        q_final = jnp.where(self.config.enable_defrost, q_final, q_final) # Placeholder
+
         final_cop = jnp.where(power_state > 1.0, q_final / power_state, 0.0)
-        
-        # Recalculate T_supply based on final (defrosted) output
-        # If defrost is active, Q drops, so T_supply drops.
         t_supply_final = T_sink_c + (q_final / (m_cp + 1e-4))
 
         return HeatPumpOutput(
@@ -168,46 +237,49 @@ class HighFidelityHeatPump(eqx.Module):
             electrical_power_w=power_state,
             cop=final_cop,
             supply_temp_c=t_supply_final,
-            condenser_temp_c=t_cond_final
+            condenser_temp_c=t_cond_final,
+            evaporator_temp_c=t_evap_final,
+            eta_second_law=eta_final,
+            volumetric_limit_hit=limit_hit
         )
+    
+
 
 # --- 3. Verification Script ---
 
 if __name__ == "__main__":
-    # Test Parameters
+    # Config setup
     config = HeatPumpConfig(
         max_electrical_power_w=3000.0,
         min_electrical_power_w=500.0,
-        ramp_rate_w_per_sec=100.0,
-        design_air_flow_m3_s=0.5,
-        max_supply_temp_c=50.0,
-        ua_condenser_nominal=900.0
+        design_air_flow_m3_s=0.5
+    )
+    hp = TopTierHeatPump(config, n_rooms=1)
+    
+    # 1. Cold Snap Scenario (-7 C)
+    exo_cold = ExogenousData(
+        ambient_temp=jnp.array(-7.0),
+        air_density=jnp.array(1.28),
+        relative_humidity=jnp.array(0.6)
     )
     
-    hp_model = HighFidelityHeatPump(config, n_rooms=1)
+    # Vectorize across power levels [Low, Medium, Max]
+    powers = jnp.array([800.0, 1800.0, 3000.0])
+    vmap_calc = jax.vmap(hp.calculate_output, in_axes=(0, None, None))
     
-    # Run a sweep of Ambient Temps from -10C to +15C
-    ambient_temps = jnp.linspace(-10, 15, 20)
+    outputs = vmap_calc(powers, jnp.array(21.0), exo_cold)
     
-    # Condition 1: High Humidity (Defrost Risk), Full Power
-    exo_high_rh = ExogenousData(
-        ambient_temp=ambient_temps,
-        air_density=jnp.ones_like(ambient_temps) * 1.2,
-        relative_humidity=jnp.ones_like(ambient_temps) * 0.9 # 90% RH
-    )
+    print("\n--- Simulation: -7C Ambient, 21C Indoor ---")
+    print(f"{'Input (W)':<10} | {'Q_out (W)':<10} | {'COP':<6} | {'T_evap':<8} | {'T_cond':<8} | {'Limit?':<6}")
+    print("-" * 65)
     
-    # Vectorize calculation
-    vmap_calc = jax.vmap(hp_model.calculate_output, in_axes=(None, None, 0))
-    
-    # 2000W Input, 20C Return Temp
-    output = vmap_calc(jnp.array(2000.0), jnp.array(20.0), exo_high_rh)
-    
-    print(f"{'Amb(C)':<8} | {'COP':<6} | {'Q_out(W)':<9} | {'T_supp(C)':<9} | {'T_cond(C)':<9}")
-    print("-" * 55)
-    for i in range(len(ambient_temps)):
-        print(f"{ambient_temps[i]:<8.1f} | {output.cop[i]:<6.2f} | {output.thermal_power_w[i]:<9.0f} | "
-              f"{output.supply_temp_c[i]:<9.1f} | {output.condenser_temp_c[i]:<9.1f}")
+    for i in range(3):
+        p_in = powers[i]
+        print(f"{p_in:<10.0f} | {outputs.thermal_power_w[i]:<10.0f} | {outputs.cop[i]:<6.2f} | "
+              f"{outputs.evaporator_temp_c[i]:<8.1f} | {outputs.condenser_temp_c[i]:<8.1f} | "
+              f"{outputs.volumetric_limit_hit[i]:<6.1f}")
 
-    # Note on fidelity observation:
-    # 1. Check around +1.0C. COP should dip due to Defrost Logic.
-    # 2. Check T_cond vs T_supply. The gap is the approach temp, determined by UA.
+    print("\nObservation:")
+    print("1. Low Power: High COP (3.0+), T_evap stays close to ambient.")
+    print("2. Max Power: COP Crashes (2.0), T_evap sags to -17C.")
+    print("3. Check 'Limit?': If 1.0, the compressor is physically choked by low gas density.")

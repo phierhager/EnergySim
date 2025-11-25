@@ -159,7 +159,6 @@ class ThermalConfig(eqx.Module):
     room_rad_indices: Tuple[int, ...] = eqx.field(static=True)
     wall_indices: Tuple[int, ...] = eqx.field(static=True)
     mass_indices: Tuple[int, ...] = eqx.field(static=True)
-    waste_heat_node_index: int = eqx.field(static=True, default=-1)
 
     # Input Mappings
     u_idx_heating: Array
@@ -173,7 +172,14 @@ class ThermalConfig(eqx.Module):
     mixing_pairs: Array 
     mixing_conductance: Array 
 
+
+    # Metadata
+    node_names: List[str] = eqx.field(static=True)
+    node_map: Dict[str, int] = eqx.field(static=True)
+    input_map: Dict[str, Dict[str, int]] = eqx.field(static=True)
+
     # Parameters
+    waste_heat_node_index: int = eqx.field(static=True, default=-1)
     use_dynamic_infiltration: bool = eqx.field(static=True, default=False)
     leakage_area_m2: float = eqx.field(static=True, default=0.05)
     stack_coeff: float = eqx.field(static=True, default=0.12)
@@ -181,11 +187,6 @@ class ThermalConfig(eqx.Module):
     room_vol_m3: float = eqx.field(static=True, default=0.0)
     setpoint: float = eqx.field(static=True, default=21.0)
     comfort_band: float = eqx.field(static=True, default=1.0)
-
-    # Metadata
-    node_names: List[str] = eqx.field(static=True)
-    node_map: Dict[str, int] = eqx.field(static=True)
-    input_map: Dict[str, Dict[str, int]] = eqx.field(static=True)
 
 class AirflowConfig(eqx.Module):
     """
@@ -364,6 +365,14 @@ class SolarConfig(eqx.Module):
     # The portion of the sky dome visible to the panel (0.0 to 1.0).
     # If None, the model calculates the unobstructed view factor based on tilt.
     sky_view_factor: Optional[float] = eqx.field(static=True, default=None)
+
+    # Thermal Physics (Faiman Model)
+    thermal_u0: float = 25.0  # W/m²K (Heat transfer const). Ground=25, Roof=15
+    thermal_u1: float = 6.84  # W/m²K per m/s (Wind cooling). Ground=6.84, Roof=1.2
+    
+    # Optical Physics
+    iam_b0: float = 0.05      # IAM coeff. Standard=0.05, Anti-Reflective=0.03
+    albedo: float = 0.2       # Ground reflection coefficient
 
 class GroundPhysicsConfig(eqx.Module):
     """Parameters for the Kasuda-Achenbach ground model."""
