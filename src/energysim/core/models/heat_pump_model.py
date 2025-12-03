@@ -1,172 +1,176 @@
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from typing import NamedTuple, Tuple
-
-# Type alias for clarity
-Array = jax.Array
-
-# --- 1. Physics-Informed Configuration ---
-
-class CompressorPhysics(NamedTuple):
-    # --- Isentropic Efficiency Map (Energy Quality) ---
-    eta_peak: float = 0.58 
-    design_lift_k: float = 30.0
-    design_speed_ratio: float = 0.5
-    # Sensitivity coefficients
-    k_lift: float = 0.0005    # Penalty for high pressure ratio
-    k_speed: float = 0.25     # Penalty for deviating from optimal RPM
-    
-    # --- Volumetric Efficiency (Mass Flow Limit) ---
-    # At T_evap = -25C, density is low. Capacity must drop.
-    # We use a simplified Antoine-like relation for suction density.
-    # displacement_factor: scales the raw physical size of the compressor
-    max_displacement_w_per_k: float = 120.0 
-
-class HeatPumpConfig(NamedTuple):
-    # Electrical Limits
-    max_electrical_power_w: float
-    min_electrical_power_w: float
-    
-    # Design Constraints
-    design_air_flow_m3_s: float
-    
-    # Heat Exchanger UA (Watts/Kelvin)
-    # High UA = Better approach temps = Higher Efficiency
-    ua_condenser_nominal: float = 350.0  
-    ua_evaporator_nominal: float = 450.0
-    
-    # Sub-components
-    compressor: CompressorPhysics = CompressorPhysics(
-        max_displacement_w_per_k=85.0  # Reduced from 120.0
-    )
-    motor_eff_curve_coeffs: tuple = (0.88, 0.08, -0.04) 
-
-    # Environment
-    enable_defrost: bool = True
-
-class HeatPumpOutput(NamedTuple):
-    thermal_power_w: Array
-    electrical_power_w: Array
-    cop: Array
-    supply_temp_c: Array
-    condenser_temp_c: Array 
-    evaporator_temp_c: Array
-    eta_second_law: Array
-    volumetric_limit_hit: Array # Diagnostic: Did we max out flow?
-
-class ExogenousData(NamedTuple):
-    ambient_temp: Array
-    air_density: Array
-    relative_humidity: Array 
-
-# --- 2. The Mechanics (Physics Engine) ---
-
-import jax.numpy as jnp
-import equinox as eqx
-from ..shared.data_structs import HeatPumpConfig, HeatPumpOutput, Array, ExogenousData
+from typing import Tuple, TypeVar
+from ..physics.constants import CONSTANTS
+from ..shared.data_structs import HeatPumpConfig, HeatPumpOutput, Array, HeatPumpState, HeatPumpInputs
+from ..physics import thermodynamics
 
 class AbstractHeatPumpModel(eqx.Module):
-    current_electrical_w: Array
-    current_thermal_w: Array
     config: HeatPumpConfig
     n_rooms: int = eqx.field(static=True)
 
-    @eqx.filter_jit
-    def step(self, requested_electrical_w: Array, exo: ExogenousData, dt: float) -> tuple['AbstractHeatPumpModel', HeatPumpOutput]:
+    def dynamics(self, t: float, state: HeatPumpState, inputs: HeatPumpInputs) -> HeatPumpState:
+        """Calculates d(Electrical_Power)/dt (Compressor Inertia)."""
+        raise NotImplementedError
+
+    def calculate_output(
+        self, 
+        state: HeatPumpState, 
+        T_sink_c: Array, 
+        ambient_temp_c: Array,
+        air_density_kg_m3: Array,
+        relative_humidity: Array
+    ) -> HeatPumpOutput:
         raise NotImplementedError
 
 
-class PassthroughHeatPumpModel(AbstractHeatPumpModel):
-    def __init__(self, config: HeatPumpConfig, n_rooms: int):
-        super().__init__(
-            current_electrical_w=jnp.zeros(n_rooms),
-            current_thermal_w=jnp.zeros(n_rooms),
-            config=config,
-            n_rooms=n_rooms
+class NullHeatPumpModel(AbstractHeatPumpModel):
+    """
+    Implements the Null Object Pattern.
+    Represents a heat pump that is either turned off, broken, or non-existent.
+    Returns strictly ZERO for all energy and heat flows.
+    """
+
+    def dynamics(self, t: float, state: HeatPumpState, inputs: HeatPumpInputs) -> HeatPumpState:
+        return HeatPumpState(
+            electrical_power_w=jnp.array(0.0)
+        )
+    
+    def calculate_output(
+        self, 
+        state: HeatPumpState, 
+        T_sink_c: Array, 
+        ambient_temp_c: Array,
+        air_density_kg_m3: Array,
+        relative_humidity: Array
+    ) -> HeatPumpOutput:
+        
+        # Explicitly zero out everything.
+        # We ignore power_state because a Null machine consumes nothing regardless of control signal.
+        
+        zeros = jnp.zeros_like(state.electrical_power_w)
+        
+        return HeatPumpOutput(
+            thermal_power_w=zeros,
+            electrical_power_w=zeros,
+            cop=zeros,
+            
+            # Temperatures "pass through" neutrally or return 0?
+            # For a Null model, it's safer to return the boundary temperatures 
+            # so that if this output is used in a mixing equation, it doesn't 
+            # introduce -273C (0K) anomalies.
+            # Ideally, the downstream component should see q_thermal=0 and ignore the temp.
+            
+            supply_temp_c=T_sink_c,      # No heating occurred
+            condenser_temp_c=T_sink_c,   # Equilibrated with sink
+            evaporator_temp_c=ambient_temp_c, # Equilibrated with ambient
+            
+            eta_second_law=zeros,
+            volumetric_limit_hit=zeros
         )
 
-    @eqx.filter_jit
-    def step(self, requested_electrical_w: Array, exo: ExogenousData, dt: float):
-        # Pass through 0s, maintain state as 0s
-        return self, HeatPumpOutput(
-            thermal_power_w=self.current_thermal_w,
-            electrical_power_w=self.current_electrical_w
+
+# --- 2. Mechanistic (High Fidelity) ---
+
+class MechanisticHeatPump(AbstractHeatPumpModel):
+    """
+    Physics-based HP model solving the Condenser/Evaporator equilibrium
+    using the pure functions in physics.thermodynamics.
+    """
+
+    def dynamics(self, t: float, state: HeatPumpState, inputs: HeatPumpInputs) -> HeatPumpState:
+        """
+        Calculates d(Electrical_Power)/dt (Compressor Inertia).
+        Returns a state object where fields represent derivatives.
+        """
+        target = inputs.target_power_w
+        
+        # 1. Scale Limits
+        max_w = self.config.max_electrical_power_w / self.n_rooms
+        min_w = self.config.min_electrical_power_w / self.n_rooms
+        
+        # 2. Control Logic
+        # Clamp target to physical limits
+        target_clamped = jnp.clip(target, 0.0, max_w)
+        
+        # Deadband / Minimum Output Logic:
+        # If target is below min_w, we force it to 0 (OFF).
+        # We do not allow the compressor to run at 10W if min is 300W.
+        target_final = jnp.where(target_clamped < min_w, 0.0, target_clamped)
+        
+        # 3. Error Signal
+        error_w = target_final - state.electrical_power_w
+        
+        # 4. Adaptive Smoothing (From AC Model)
+        # Instead of hardcoded 50.0, we use 2% of the machine's capacity.
+        # This makes the solver stable for both 500W micro-HPs and 20kW industrial HPs.
+        smooth_band_w = max_w * 0.02
+        smooth_band_w = jnp.maximum(smooth_band_w, 1.0) # Safety against div/0
+        
+        # 5. Derivative Calculation
+        # dP/dt = MaxRamp * tanh(Error / Band)
+        dP_dt = self.config.ramp_rate_w_per_sec * jnp.tanh(error_w / smooth_band_w)
+        
+        # 6. Return Derivative State (Fixing the Type Error)
+        # We return a HeatPumpState where 'electrical_power_w' contains the derivative.
+        return HeatPumpState(
+            electrical_power_w=dP_dt
         )
 
-class TopTierHeatPump(eqx.Module):
-    config: HeatPumpConfig
-    n_rooms: int = eqx.field(static=True)
-    cp_air: float = 1005.0 
-
-    def _calculate_isentropic_efficiency(self, lift_k: Array, speed_ratio: Array) -> Array:
-        """
-        Calculates Compressor Isentropic Efficiency (eta_II).
-        Penalizes efficiency when Lift is high or Speed is off-design.
-        """
-        c = self.config.compressor
-        delta_lift = lift_k - c.design_lift_k
-        delta_speed = speed_ratio - c.design_speed_ratio
+    def calculate_output(
+        self, 
+        power_state: Array, 
+        T_sink_c: Array, 
+        ambient_temp_c: Array,
+        source_air_density_kg_m3: Array, # Specific to Outdoor Air (Source)
+        relative_humidity: Array
+    ) -> HeatPumpOutput:
         
-        # Elliptical/Parabolic decay
-        penalty = (c.k_lift * delta_lift**2) + (c.k_speed * delta_speed**2)
-        return jnp.clip(c.eta_peak - penalty, 0.20, 0.75)
-
-    def _calculate_volumetric_limit(self, t_evap_c: Array, speed_ratio: Array) -> Array:
-        """
-        Calculates the MAXIMUM Q_source the compressor can physically ingest.
-        Physics: Mass Flow ~ RPM * Suction_Density
-        Suction Density drops exponentially with Temperature.
-        """
-        # 1. Density Proxy (Simplified Clausius-Clapeyron / Ideal Gas)
-        # Normalized to 1.0 at 0C. Drops to ~0.4 at -20C.
-        # This curve shape is critical for "Cold Climate" realism.
-        density_factor = jnp.exp(0.045 * t_evap_c)
+        # --- A. Input Pre-processing ---
+        max_w = self.config.max_electrical_power_w / self.n_rooms
         
-        # 2. Volumetric Efficiency drop at high speeds
-        vol_eff = 0.95 - (0.1 * speed_ratio)
+        # 1. Part Load Ratio (PLR)
+        # Avoid division by zero
+        plr = jnp.clip(power_state / (max_w + 1e-6), 0.0, 1.0)
         
-        # 3. Max Source Heat (Watts)
-        # A scaling factor representing displacement * latent_heat
-        limit_w = self.config.compressor.max_displacement_w_per_k * 300.0 # Base scaler
-        
-        return limit_w * speed_ratio * density_factor * vol_eff
-
-    def _calculate_motor_efficiency(self, electrical_w: Array) -> Array:
-        max_w_per_room = self.config.max_electrical_power_w / self.n_rooms
-        plr = electrical_w / (max_w_per_room + 1e-6)
-        c = self.config.motor_eff_curve_coeffs
-        eff = c[0] + (c[1] * plr) + (c[2] * (plr**2))
-        return jnp.clip(eff, 0.1, 0.98)
-
-    def calculate_output(self, power_state: Array, T_sink_c: Array, exo: ExogenousData) -> HeatPumpOutput:
-        
-        # --- A. Input State Pre-processing ---
-        max_w_per_room = self.config.max_electrical_power_w / self.n_rooms
-        plr = jnp.clip(power_state / (max_w_per_room + 1e-6), 0.0, 1.0)
-        
-        # Fan Laws (Variable Air Volume)
+        # 2. Variable Speed Flow & UA Scaling
+        # We assume pump/fan speeds scale with compressor speed
         flow_ratio = 0.2 + 0.8 * plr 
-        m_dot = self.config.design_air_flow_m3_s * exo.air_density * flow_ratio
-        m_cp = m_dot * self.cp_air
+        
+        # --- SINK SIDE (Indoors/Radiators) ---
+        # Generic: Works for Air (AC) or Water (Heat Pump) based on Config
+        m_dot_sink = self.config.design_sink_flow_m3_s * self.config.sink_fluid_density_kg_m3 * flow_ratio
+        m_cp_sink = m_dot_sink * self.config.sink_specific_heat_j_kgk
 
-        # Variable UA Scaling
-        ua_cond_eff = self.config.ua_condenser_nominal * (flow_ratio ** 0.8)
-        ua_evap_eff = self.config.ua_evaporator_nominal * (flow_ratio ** 0.8) 
+        # --- SOURCE SIDE (Outdoors) ---
+        # Fixed as Air for an Air-Source Heat Pump
+        # We assume design_source_flow is in the config, or use a ratio of sink flow
+        m_dot_source = self.config.design_source_air_flow_m3_s * source_air_density_kg_m3 * flow_ratio
+        m_cp_source = m_dot_source * CONSTANTS.SPECIFIC_HEAT_AIR
 
-        # Electrical -> Shaft Power
-        eta_motor = self._calculate_motor_efficiency(power_state)
+        # UA Scaling (Heat Exchanger Conductance)
+        ua_cond = self.config.ua_condenser_nominal * (flow_ratio ** 0.8)
+        ua_evap = self.config.ua_evaporator_nominal * (flow_ratio ** 0.8) 
+
+        # 3. Motor Efficiency
+        # Standardized to use the unified thermodynamics helper
+        eta_motor = thermodynamics.calculate_inverter_efficiency(
+            power_state, 
+            max_w, 
+            self.config.motor_eff_curve_coeffs
+        )
         shaft_power = power_state * eta_motor
 
-        # --- B. Implicit Physics Solver (Energy + Mass Balance) ---
+        # --- B. Implicit Physics Solver (Vapor Compression Cycle) ---
         # State: (Q_thermal, T_cond, T_evap, Eta_II, Volumetric_Flag)
-        InitState = Tuple[Array, Array, Array, Array, Array]
+        InitState = TypeVar('InitState', bound=Tuple[Array, Array, Array, Array, Array])
         
-        # Robust Initial Guesses
+        # Initial Guesses
         init_carry: InitState = (
-            shaft_power * 3.0,          # Guess Q ~ COP of 3
-            T_sink_c + 5.0,             # Guess T_cond
-            exo.ambient_temp - 5.0,     # Guess T_evap
+            shaft_power * 3.0,          # Guess Q (COP=3)
+            T_sink_c + 5.0,             # Guess T_cond > Sink
+            ambient_temp_c - 5.0,       # Guess T_evap < Ambient
             jnp.array(0.5),             # Guess Eta
             jnp.array(0.0)              # Limit flag
         )
@@ -174,63 +178,82 @@ class TopTierHeatPump(eqx.Module):
         def system_balance_step(carry: InitState, _) -> Tuple[InitState, None]:
             q_prev, _, _, _, _ = carry
             
-            # 1. Sink Side (Condenser)
-            # T_cond rises to push Q into the room
-            delta_t_air = q_prev / (m_cp + 1e-4)
-            t_supply = T_sink_c + delta_t_air
-            t_cond_new = t_supply + (q_prev / (ua_cond_eff + 1e-4))
+            # 1. Condenser Balance (Reject Q to Sink)
+            # T_supply = T_return + Q / (m*cp)
+            t_supply = T_sink_c + (q_prev / (m_cp_sink + 1e-4))
             
-            # 2. Source Side (Evaporator)
-            # T_evap drops to pull (Q - Work) from the outside air
+            # LMTD Approximation: T_cond must be higher than T_supply to transfer heat
+            t_cond_new = t_supply + (q_prev / (ua_cond + 1e-4))
+            
+            # 2. Evaporator Balance (Cooling the Source)
             q_source_needed = q_prev - shaft_power
-            t_evap_new = exo.ambient_temp - (q_source_needed / (ua_evap_eff + 1e-4))
             
-            # 3. Volumetric Check (The "Choke")
-            # Can the compressor actually pump this much q_source at this t_evap?
-            max_q_source = self._calculate_volumetric_limit(t_evap_new, plr)
+            # Fluid cools down: T_leaving = T_ambient - DeltaT
+            t_source_leaving = ambient_temp_c - (q_source_needed / (m_cp_source + 1e-4))
             
-            # Soft clamp for differentiability (LogSumExp trick or simple min)
-            # We use simple min here for clarity, LogSumExp if gradients get noisy
+            # Evaporator must be colder than the leaving air to absorb that heat
+            t_evap_new = t_source_leaving - (q_source_needed / (ua_evap + 1e-4))
+            
+            # 3. Volumetric Limit (Compressor Displacement Constraint)
+            # This is the "Engine Speed Limit" of thermodynamics
+            max_q_source = thermodynamics.calculate_volumetric_limit(
+                t_evap_new, 
+                plr,
+                self.config.compressor.max_displacement_w_per_k
+            )
+            
+            # Hard physical limit: Cannot pump more gas than cylinder volume allows
             q_source_limited = jnp.minimum(q_source_needed, max_q_source)
             limit_hit = jnp.where(q_source_needed > max_q_source, 1.0, 0.0)
             
-            # Recalculate Q_thermal if we were choked
             q_thermal_limited = q_source_limited + shaft_power
 
-            # 4. Thermodynamic Cycle
+            # 4. Isentropic Efficiency (The "Quality" of the compressor)
             t_cond_k = t_cond_new + 273.15
             t_evap_k = t_evap_new + 273.15
-            lift = jnp.maximum(8.0, t_cond_k - t_evap_k) # Min lift 8K
+            lift = jnp.maximum(8.0, t_cond_k - t_evap_k) # Min lift constraint
             
             cop_carnot = t_cond_k / lift
-            eta_ii_new = self._calculate_isentropic_efficiency(lift, plr)
             
-            # 5. Energy Balance Target
-            cop_thermo = cop_carnot * eta_ii_new
-            q_target_thermo = shaft_power * cop_thermo
+            eta_ii = thermodynamics.calculate_isentropic_efficiency(
+                lift, plr,
+                self.config.compressor.design_lift_k,
+                self.config.compressor.design_speed_ratio,
+                self.config.compressor.eta_peak,
+                self.config.compressor.k_lift,
+                self.config.compressor.k_speed
+            )
             
-            # Final Q is the minimum of Thermodynamic Limit and Volumetric Limit
-            q_target_final = jnp.minimum(q_target_thermo, q_thermal_limited)
+            cop_thermo = cop_carnot * eta_ii
+            q_target = jnp.minimum(shaft_power * cop_thermo, q_thermal_limited)
 
-            # Soft Update (Damping)
-            q_update = 0.6 * q_prev + 0.4 * q_target_final
+            # Soft Update (Relaxation) for Numerical Stability
+            q_update = 0.6 * q_prev + 0.4 * q_target
             
-            return (q_update, t_cond_new, t_evap_new, eta_ii_new, limit_hit), None
+            return (q_update, t_cond_new, t_evap_new, eta_ii, limit_hit), None
 
-        # Execute Solver
+        # Solve Fixed Point
         (q_final_raw, t_cond_final, t_evap_final, eta_final, limit_hit), _ = jax.lax.scan(
             system_balance_step, init_carry, None, length=8
         )
 
         # --- C. Final Output Generation ---
-        q_final = q_final_raw
         
-        # Defrost penalty (Simplified for this snippet)
-        # If T_evap < 0 and RH is high, apply penalty
-        q_final = jnp.where(self.config.enable_defrost, q_final, q_final) # Placeholder
-
+        # 1. Defrost Logic (Source Side is Air, so icing happens)
+        # Note: If Source was water (Geothermal), you would set enable_defrost=False in config
+        defrost_factor = jnp.where(
+            self.config.enable_defrost,
+            thermodynamics.calculate_defrost_penalty(ambient_temp_c, relative_humidity),
+            1.0
+        )
+        
+        q_final = q_final_raw * defrost_factor
+        
+        # 2. Calculate Supply Temp (The actual temp entering the room/tank)
+        t_supply_final = T_sink_c + (q_final / (m_cp_sink + 1e-4))
+        
+        # 3. Final COP
         final_cop = jnp.where(power_state > 1.0, q_final / power_state, 0.0)
-        t_supply_final = T_sink_c + (q_final / (m_cp + 1e-4))
 
         return HeatPumpOutput(
             thermal_power_w=q_final,
@@ -242,44 +265,3 @@ class TopTierHeatPump(eqx.Module):
             eta_second_law=eta_final,
             volumetric_limit_hit=limit_hit
         )
-    
-
-
-# --- 3. Verification Script ---
-
-if __name__ == "__main__":
-    # Config setup
-    config = HeatPumpConfig(
-        max_electrical_power_w=3000.0,
-        min_electrical_power_w=500.0,
-        design_air_flow_m3_s=0.5
-    )
-    hp = TopTierHeatPump(config, n_rooms=1)
-    
-    # 1. Cold Snap Scenario (-7 C)
-    exo_cold = ExogenousData(
-        ambient_temp=jnp.array(-7.0),
-        air_density=jnp.array(1.28),
-        relative_humidity=jnp.array(0.6)
-    )
-    
-    # Vectorize across power levels [Low, Medium, Max]
-    powers = jnp.array([800.0, 1800.0, 3000.0])
-    vmap_calc = jax.vmap(hp.calculate_output, in_axes=(0, None, None))
-    
-    outputs = vmap_calc(powers, jnp.array(21.0), exo_cold)
-    
-    print("\n--- Simulation: -7C Ambient, 21C Indoor ---")
-    print(f"{'Input (W)':<10} | {'Q_out (W)':<10} | {'COP':<6} | {'T_evap':<8} | {'T_cond':<8} | {'Limit?':<6}")
-    print("-" * 65)
-    
-    for i in range(3):
-        p_in = powers[i]
-        print(f"{p_in:<10.0f} | {outputs.thermal_power_w[i]:<10.0f} | {outputs.cop[i]:<6.2f} | "
-              f"{outputs.evaporator_temp_c[i]:<8.1f} | {outputs.condenser_temp_c[i]:<8.1f} | "
-              f"{outputs.volumetric_limit_hit[i]:<6.1f}")
-
-    print("\nObservation:")
-    print("1. Low Power: High COP (3.0+), T_evap stays close to ambient.")
-    print("2. Max Power: COP Crashes (2.0), T_evap sags to -17C.")
-    print("3. Check 'Limit?': If 1.0, the compressor is physically choked by low gas density.")

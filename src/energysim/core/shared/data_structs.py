@@ -238,18 +238,45 @@ class GeometryConfig(eqx.Module):
 
 
 class BatteryConfig(eqx.Module):
-    model_type: Literal["simple", "degradation"] = eqx.field(static=True, default="simple")
+    # --- Basic Specs ---
     capacity_kwh: float = eqx.field(static=True, default=10.0)
+    capacity_ah: Optional[float] = eqx.field(static=True, default=None) # Model checks this in _capacity_as
     max_power_kw: float = eqx.field(static=True, default=5.0)
     efficiency: float = eqx.field(static=True, default=0.90)
     degradation_rate_per_cycle: float = eqx.field(static=True, default=0.0001)
 
+    # --- Pack Architecture ---
+    n_series: int = eqx.field(static=True, default=110) # Used to scale OCV/R0 grids
+
+    # --- Voltage Limits (for CC-CV logic) ---
+    v_min: float = eqx.field(static=True, default=300.0)
+    v_max: float = eqx.field(static=True, default=430.0)
+
+    # --- Current Constraints ---
+    max_charge_current_a: Optional[float] = eqx.field(static=True, default=None)
+    max_discharge_current_a: Optional[float] = eqx.field(static=True, default=None)
+
+    # --- Thermal Dynamics ---
+    C_core: float = eqx.field(static=True, default=5e4)     # Thermal mass (J/K) core
+    C_case: float = eqx.field(static=True, default=1e4)     # Thermal mass (J/K) case
+    R_core_case: float = eqx.field(static=True, default=0.1)      # Thermal resistance core->case (K/W)
+    R_case_ambient: float = eqx.field(static=True, default=0.5)     # Thermal resistance case->ambient (K/W)
+
+    ambient_temp: float = eqx.field(static=True, default=298.15) # Default ambient (K)
+    ref_temp_k: float = eqx.field(static=True, default=298.15)   # Reference temp for Arrhenius equation
+    activation_energy_r0_k: float = eqx.field(static=True, default=2000.0)  # Activation energy (J/mol)
+    activation_energy_rc_k: float = eqx.field(static=True, default=2000.0)  # Activation energy (J/mol)
+    hysteresis_rate: float = eqx.field(static=True, default=50.0)  # Hysteresis rate constant
+
+
     @property
     def capacity_j(self) -> float:
+        """Calculates capacity in Joules from kWh."""
         return self.capacity_kwh * 3.6e6
 
     @property
     def max_power_w(self) -> float:
+        """Calculates max power in Watts."""
         return self.max_power_kw * 1000.0
 
 
@@ -257,6 +284,28 @@ class RewardConfig(eqx.Module):
     price_weight: float = eqx.field(static=True, default=1.0)
     comfort_weight: float = eqx.field(static=True, default=5.0)
 
+class CompressorConfig(eqx.Module):
+    """
+    Physical parameters defining the compressor's volumetric and isentropic behavior.
+    """
+    # 1. Volumetric Limits
+    # The maximum theoretical capacity (W/K) the compressor can move at 100% speed.
+    # Think of this as (Displacement Volume * RPM * Density_Ref).
+    max_displacement_w_per_k: float = 120.0 
+
+    # 2. Isentropic Efficiency Curve Parameters (Grasso's Polynomial / Empirical)
+    # The temperature difference (Cond - Evap) where efficiency peaks
+    design_lift_k: float = 30.0    
+    
+    # The speed ratio (0.0 to 1.0) where efficiency peaks
+    design_speed_ratio: float = 0.6 
+    
+    # The maximum possible isentropic efficiency (0.0 to 1.0)
+    eta_peak: float = 0.70         
+    
+    # Sensitivity parameters (Shape of the efficiency hill)
+    k_lift: float = 2.5              # Sensitivity to lift deviation
+    k_speed: float = 1.8           # Sensitivity to speed deviation
 
 class AirConditionerConfig(eqx.Module):
     model_type: Literal["stateless", "ramping", "variable_cop"] = eqx.field(static=True, default="stateless")
@@ -275,29 +324,151 @@ class AirConditionerConfig(eqx.Module):
     cop_ambient_temps_c: Array = eqx.field(default_factory=lambda: jnp.array([20.0, 25.0, 30.0, 35.0, 40.0]))
     cop_values_cooling: Array = eqx.field(default_factory=lambda: jnp.array([4.5, 4.0, 3.5, 3.0, 2.5]))
 
-    # --- NEW: Part Load Ratio (PLR) Curve ---
-    # Modifier = c0 + c1*PLR + c2*PLR^2
-    # Default: 0.85 + 0.15*PLR (Efficiency drops to 85% at low load)
-    part_load_curve_coeffs: Array = eqx.field(default_factory=lambda: jnp.array([0.85, 0.15, 0.0]))
+    motor_eff_curve_coeffs: Array = eqx.field(default=jnp.array([0.85, 0.1, -0.1]))
+
+    rated_airflow_kg_s: float = 0.5  # Approx 400 CFM for 1 ton
+    coil_bypass_factor: float = 0.15 # Typical for residential DX
+    coil_adp_c: float = 8.0          # Apparatus Dew Point (Coil Temp)
+
+    # Physics Parameters (Same as HP)
+    compressor: CompressorConfig = CompressorConfig()
+    
+    # Heat Exchanger Sizing
+    ua_condenser_nominal: float = 400.0  # W/K (Outdoor coil)
+    ua_evaporator_nominal: float = 350.0 # W/K (Indoor coil)
+    design_air_flow_m3_s: float = 0.5    # Rated Fan Speed
+    
+    # We keep these for the "Passthrough" model, 
+    # but Mechanistic model ignores them:
+    cop_cooling: float = 3.0
 
 class HeatPumpConfig(eqx.Module):
-    model_type: Literal["stateless", "ramping", "variable_cop", "mechanistic"] = eqx.field(static=True, default="stateless")
+    # --- A. System Sizing ---
+    # Total electrical draw allowed
+    max_electrical_power_w: float 
+    min_electrical_power_w: float 
     
-    # Standard Params
-    max_electrical_power_w: float = eqx.field(static=True, default=5000.0)
-    min_electrical_power_w: float = eqx.field(static=True, default=500.0)
-    cop_heating: float = eqx.field(static=True, default=3.5)
-    
-    # Ramping / Variable params
-    ramp_rate_w_per_sec: float = eqx.field(static=True, default=1000.0)
-    tau_thermal_seconds: float = eqx.field(static=True, default=60.0)
-    cop_ambient_temps_c: Array = eqx.field(default_factory=lambda: jnp.array([-10.0, 0.0, 10.0, 20.0]))
-    cop_values_heating: Array = eqx.field(default_factory=lambda: jnp.array([2.5, 3.0, 3.5, 4.0]))
-    part_load_curve_coeffs: Array = eqx.field(default_factory=lambda: jnp.array([0.85, 0.15, 0.0]))
+    # Dynamics: How fast the compressor can spin up (Inertia)
+    ramp_rate_w_per_sec: float = 50.0
 
-    # --- Mechanistic Params ---
-    max_supply_temp_c: float = eqx.field(static=True, default=50.0)
-    design_air_flow_m3_s: float = eqx.field(static=True, default=0.15) # per room
+    # --- B. Fluid Dynamics (The Generic Interface) ---
+    # SINK (Indoor)
+    # For Air-to-Air: use ~1005 J/kgK and ~1.2 kg/m3
+    # For Air-to-Water: use ~4186 J/kgK and ~997 kg/m3 (or glycol vals)
+    sink_specific_heat_j_kgk: float 
+    sink_fluid_density_kg_m3: float
+    design_sink_flow_m3_s: float     # e.g., Water flow rate or Indoor Fan airflow
+
+    # SOURCE (Outdoor)
+    # Almost always Air for this model class
+    design_source_air_flow_m3_s: float 
+
+    # --- C. Heat Exchangers (UA Values) ---
+    # Conductance (Watts/Kelvin). Higher = Closer approach temps = Better COP.
+    ua_condenser_nominal: float
+    ua_evaporator_nominal: float
+
+    # --- D. Motor & Drive ---
+    # Polynomial coefficients [c0, c1, c2] for Inverter Efficiency
+    # eff = c0 + c1*plr + c2*plr^2
+    motor_eff_curve_coeffs: Array 
+
+    # --- E. Sub-Components ---
+    compressor: CompressorConfig
+    
+    # --- F. Logic Flags ---
+    enable_defrost: bool = True
+
+    # -----------------------------------------------------------------------
+    # Factory Methods (Builders)
+    # -----------------------------------------------------------------------
+
+    @classmethod
+    def create_air_to_air(
+        cls, 
+        max_kw: float, 
+        n_rooms: int = 1,
+        quality: str = 'standard' # 'standard' or 'high_efficiency'
+    ):
+        """Creates a configuration for a standard Split AC / Heat Pump."""
+        
+        total_w = max_kw * 1000.0
+        
+        # Rule of Thumb Sizing
+        # Airflow: ~0.05 m3/s per kW of capacity
+        airflow = 0.05 * max_kw 
+        
+        # UA Sizing: High Efficiency units have larger heat exchangers
+        ua_factor = 250.0 if quality == 'high_efficiency' else 180.0
+        ua_val = ua_factor * max_kw
+
+        return cls(
+            max_electrical_power_w=total_w,
+            min_electrical_power_w=total_w * 0.15, # 15% turndown
+            
+            # Physics: Air Properties
+            sink_specific_heat_j_kgk=1005.0,
+            sink_fluid_density_kg_m3=1.204,
+            design_sink_flow_m3_s=airflow,       # Indoor Unit Fan
+            design_source_air_flow_m3_s=airflow * 1.5, # Outdoor Fan is usually larger
+            
+            ua_condenser_nominal=ua_val,
+            ua_evaporator_nominal=ua_val,
+            
+            # Standard Inverter Curve (Peak ~95% at 50% load)
+            motor_eff_curve_coeffs=jnp.array([0.85, 0.25, -0.15]),
+            
+            compressor=CompressorConfig(
+                max_displacement_w_per_k=15.0 * max_kw, # Scales with size
+                eta_peak=0.75 if quality == 'high_efficiency' else 0.68
+            )
+        )
+
+    @classmethod
+    def create_air_to_water(
+        cls, 
+        max_kw: float, 
+        glycol_percent: float = 0.0
+    ):
+        """Creates a configuration for a Hydronic Heat Pump."""
+        
+        total_w = max_kw * 1000.0
+        
+        # Water/Glycol Physics adjustments
+        # Pure Water: 4186 J/kgK, 997 kg/m3
+        cp_water = 4186.0 - (glycol_percent * 10.0)
+        rho_water = 997.0 + (glycol_percent * 2.0)
+        
+        # Water flow is usually lower volume than air for same energy (higher density)
+        # DeltaT = 5K target -> Flow = Q / (rho*cp*5)
+        # Approx 0.17 kg/s for 3.5kW -> ~0.05 m3/h per kW? 
+        # Rule of thumb: 0.25 m3/h per kW -> 0.00007 m3/s per kW
+        water_flow = (0.25 / 3600.0) * (max_kw * 1000 / 5) * 5 # Rough sizing
+        
+        ua_val = 300.0 * max_kw # Water HEX usually has better heat transfer
+
+        return cls(
+            max_electrical_power_w=total_w,
+            min_electrical_power_w=total_w * 0.10, # Water pumps can often turn down lower
+            
+            # Physics: Water Properties
+            sink_specific_heat_j_kgk=cp_water,
+            sink_fluid_density_kg_m3=rho_water,
+            design_sink_flow_m3_s=water_flow,
+            
+            # Source is still Air
+            design_source_air_flow_m3_s=0.08 * max_kw, 
+            
+            ua_condenser_nominal=ua_val, # Plate heat exchanger
+            ua_evaporator_nominal=ua_val * 0.8, # Air coil
+            
+            motor_eff_curve_coeffs=jnp.array([0.90, 0.15, -0.08]), # Better motors
+            
+            compressor=CompressorConfig(
+                max_displacement_w_per_k=18.0 * max_kw,
+                eta_peak=0.72
+            )
+        )
 
 class ThermalStorageConfig(eqx.Module):
     n_nodes: int = eqx.field(static=True, default=5)
@@ -416,6 +587,20 @@ class MoistureConfig(eqx.Module):
 # DAE INTERFACE STRUCTURES
 # ==========================================
 
+class BatteryState(eqx.Module):
+    soc: Array            # Scalar
+    temp_core_k: Array         # Scalar (Kelvin)
+    temp_case_k: Array    # Scalar (Kelvin)
+    v_rc: Array           # Shape (n_rc,)
+    v_hyst: Array           # Hysteresis voltage state [Volts]
+    
+class AirConditionerState(eqx.Module):
+    electrical_power_w: Array  # Current electrical power draw (W)
+
+class HeatPumpState(eqx.Module):
+    electrical_power_w: Array  # Current electrical power draw (W)
+
+# TODO: Update after implementing local states
 class DifferentialState(eqx.Module):
     """
     The subset of SystemState that evolves continuously via ODEs.
@@ -427,7 +612,7 @@ class DifferentialState(eqx.Module):
     storage_T: Array           # 1D: (N_nodes,), 3D: (Z, Y, X)
     
     # Battery
-    battery_soc: Array         # Scalar
+    battery: Array         # Scalar
     
     # HVAC Inertia (Ramping)
     hp_power_state: Array      # Scalar (Current Compressor Watts)
@@ -455,9 +640,12 @@ class StorageInputs(eqx.Module):
     T_return_c: Array        # Scalar (Temp coming from House)
     T_ambient: Array         # Scalar
 
+class AirConditionerInputs(eqx.Module):
+    """Inputs required to calculate AC derivatives."""
+    target_power_w: Array  # Requested Power (Positive = Cooling)
 
-class RampingInputs(eqx.Module):
-    target_power_w: Array # Scalar
+class HeatPumpInputs(eqx.Module):
+    target_power_w: Array  # Requested Power (Positive = Heating)
 
 class BatteryInputs(eqx.Module):
     power_w: Array       # Requested Power (Positive = Charge)
@@ -544,15 +732,21 @@ class SystemActions(eqx.Module):
     # If there are no smart appliances, this can be size 0.
     smart_appliance_signals: Array 
 
-
 class HeatPumpOutput(eqx.Module):
-    thermal_power_w: Array     
-    electrical_power_w: Array   
-    
+    thermal_power_w: float
+    electrical_power_w: float
+    cop: float
+    supply_temp_c: float
+    condenser_temp_c: float
+    evaporator_temp_c: float
+    eta_second_law: float
+    volumetric_limit_hit: bool
+
 class AirConditionerOutput(eqx.Module):
     thermal_power_w: Array      # Sensible cooling (Negative Watts)
     electrical_power_w: Array   # Electricity consumed (Positive Watts)
     water_removed_kg_s: Array   # Moisture removal rate (Positive kg/s)
+    volumetric_limit_hit: Array # New Flag (0.0 or 1.0)
 
 class ThermalStorageOutput(eqx.Module):
     actual_discharge_w: Array    
@@ -567,7 +761,6 @@ class BatteryOutput(eqx.Module):
     voltage_v: Array         # Terminal Voltage
     current_a: Array         # Current (Positive = Charge)
     heat_generation_w: Array # Joule heating + Entropic heat
-    soh: Array               # Current State of Health
 
 
 class SiteProperties(eqx.Module):

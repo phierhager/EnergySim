@@ -23,5 +23,5 @@ class PhysicsConstants:
     
     # Reference values for linearization (only used if dynamic calc fails)
     RHO_AIR_REF: float = 1.204                # kg/m³ (20C, 1atm)
-
+    
 CONSTANTS = PhysicsConstants()

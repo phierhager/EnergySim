@@ -136,7 +136,7 @@ class MultiRCBatteryModel(eqx.Module):
     R_case_ambient: float
     ambient_temp: float
 
-    # --- 3. Arrhenius (RESTORED) ---
+    # --- 3. Arrhenius ---
     # Essential for temperature sensitivity gradients
     activation_energy_r0_k: float 
     activation_energy_rc_k: float    
